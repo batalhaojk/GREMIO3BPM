@@ -182,6 +182,14 @@
     font-family: var(--font-mono); font-weight: 600; color: var(--ok);
     text-align: right;
   }
+  .venda-acoes {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  }
+  .btn-excluir-venda {
+    background: transparent; border: 1px solid var(--danger); color: var(--danger);
+    border-radius: 6px; padding: 3px 8px; font-size: 11px; line-height: 1.4; cursor: pointer;
+  }
+  .btn-excluir-venda:hover { background: var(--danger); color: #fff; }
 
   /* Relatórios */
   .relatorio-grid {
@@ -403,6 +411,8 @@
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -609,7 +619,8 @@
           </div>
         </div>
         <button class="btn-secondary" onclick="aplicarFiltrosVendas()" style="width: 100%; margin-bottom: 8px;">🔍 Filtrar</button>
-        <button class="btn-secondary" onclick="limparFiltrosVendas()" style="width: 100%; margin-bottom: 12px;">Limpar filtros</button>
+        <button class="btn-secondary" onclick="limparFiltrosVendas()" style="width: 100%; margin-bottom: 8px;">Limpar filtros</button>
+        <button class="btn-primary" onclick="gerarPdfVendas()" style="width: 100%; margin-bottom: 12px;">📄 Gerar PDF</button>
 
         <div class="section-title">Vendas Confirmadas</div>
         <div id="vendasLista" class="vendas-lista">
@@ -676,7 +687,8 @@
           </table>
         </div>
 
-        <button class="btn-secondary" onclick="exportarRelatorios()" style="width: 100%; margin-top: 12px;">📥 Exportar dados</button>
+        <button class="btn-secondary" onclick="exportarRelatorios()" style="width: 100%; margin-top: 12px;">📥 Exportar dados (CSV)</button>
+        <button class="btn-primary" onclick="gerarPdfRelatorios()" style="width: 100%; margin-top: 8px;">📄 Gerar PDF</button>
       </div>
     </div>
   </div>
@@ -794,6 +806,9 @@ function processarItemFila(item) {
   if (item.tipo === 'venda') {
     return VENDAS_COL_REF.doc(item.payload.id).set(item.payload);
   }
+  if (item.tipo === 'venda_delete') {
+    return VENDAS_COL_REF.doc(item.payload.id).delete();
+  }
   if (item.tipo === 'config') {
     return CONFIG_DOC_REF.set(item.payload, { merge: false });
   }
@@ -890,6 +905,7 @@ function escutarVendasDaNuvem() {
     var mudou = false;
     snapshot.forEach(function (doc) {
       var venda = doc.data();
+      if (idsExcluindoAgora[venda.id]) return; // exclusão em andamento neste dispositivo, ignora
       if (!porId[venda.id]) mudou = true;
       porId[venda.id] = venda;
     });
@@ -938,6 +954,11 @@ function salvarEstado() {
 
 /* ==================== HELPERS ==================== */
 function fmtBRL(v) { return 'R$ ' + Number(v || 0).toFixed(2).replace('.', ','); }
+function fmtDataInputBR(iso) {
+  if (!iso) return '';
+  var p = iso.split('-');
+  return p.length === 3 ? (p[2] + '/' + p[1] + '/' + p[0]) : iso;
+}
 function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 
 function categoriaDoProduto(p) {
@@ -1316,23 +1337,54 @@ window.registrarVenda = function(nomeGuerra, itens, total) {
   sincronizarVendaBackground(venda); // não bloqueia a UI; cai na fila se offline
 };
 
-// Renderizar histórico de vendas
-window.renderHistoricoVendas = function() {
-  var lista = document.getElementById('vendasLista');
-  
-  if (!estado.vendas || !estado.vendas.length) {
-    lista.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--ink-muted); font-size: 13px;">Nenhuma venda realizada ainda</div>';
+// Exclui uma venda (local + Firestore). Pede confirmação antes.
+var idsExcluindoAgora = {};
+window.excluirVenda = function(id) {
+  if (!estado.vendas) return;
+  var venda = estado.vendas.filter(function(v) { return v.id === id; })[0];
+  if (!venda) return;
+
+  var confirmado = window.confirm(
+    'Excluir a venda de ' + venda.nomeGuerra + ' (' + fmtBRL(venda.total) + ')? Essa ação não pode ser desfeita.'
+  );
+  if (!confirmado) return;
+
+  idsExcluindoAgora[id] = true;
+  estado.vendas = estado.vendas.filter(function(v) { return v.id !== id; });
+  salvarEstado();
+  renderHistoricoVendas();
+  if (typeof window.renderRelatorios === 'function') window.renderRelatorios();
+
+  if (!firestoreDisponivel) {
+    enfileirarSync('venda_delete', { id: id });
+    atualizarIndicadorSync('offline');
+    delete idsExcluindoAgora[id];
     return;
   }
-  
+  atualizarIndicadorSync('sync');
+  VENDAS_COL_REF.doc(id).delete().then(function () {
+    atualizarIndicadorSync('ok');
+    delete idsExcluindoAgora[id];
+  }).catch(function (err) {
+    console.warn('Falha ao excluir venda no Firestore, salvando na fila:', err);
+    enfileirarSync('venda_delete', { id: id });
+    atualizarIndicadorSync('offline');
+    delete idsExcluindoAgora[id];
+  });
+};
+
+// Retorna as vendas aplicando os filtros atualmente preenchidos na aba Vendas.
+function obterVendasFiltradas() {
+  if (!estado.vendas || !estado.vendas.length) return [];
+
   var filtroData1 = document.getElementById('filtroDataInicio').value;
   var filtroData2 = document.getElementById('filtroDataFim').value;
   var filtroNome = document.getElementById('filtroNomeGuerra').value.toLowerCase();
   var filtroProd = document.getElementById('filtroProduto').value;
-  
+
   var vendas = estado.vendas.slice().reverse();
-  
-  vendas = vendas.filter(function(v) {
+
+  return vendas.filter(function(v) {
     var datav = new Date(v.data).toISOString().split('T')[0];
     if (filtroData1 && datav < filtroData1) return false;
     if (filtroData2 && datav > filtroData2) return false;
@@ -1346,6 +1398,69 @@ window.renderHistoricoVendas = function() {
     }
     return true;
   });
+}
+
+// Gera um PDF com as vendas atualmente filtradas/exibidas na aba Vendas.
+window.gerarPdfVendas = function() {
+  var vendas = obterVendasFiltradas();
+  if (!vendas.length) { mostrarToast('Nenhuma venda para gerar PDF'); return; }
+  if (!window.jspdf || !window.jspdf.jsPDF) { mostrarToast('Biblioteca de PDF ainda carregando, tente novamente'); return; }
+
+  var doc = new window.jspdf.jsPDF();
+  var filtroData1 = document.getElementById('filtroDataInicio').value;
+  var filtroData2 = document.getElementById('filtroDataFim').value;
+  var filtroNome = document.getElementById('filtroNomeGuerra').value;
+  var filtroProd = document.getElementById('filtroProduto').value;
+
+  doc.setFontSize(14);
+  doc.text('Relatório de Vendas - ' + (estado.config.titulo || 'Autoatendimento'), 14, 16);
+
+  var linhasFiltro = [];
+  if (filtroData1 || filtroData2) {
+    linhasFiltro.push('Período: ' + (filtroData1 ? fmtDataInputBR(filtroData1) : '...') + ' até ' + (filtroData2 ? fmtDataInputBR(filtroData2) : '...'));
+  }
+  if (filtroNome) linhasFiltro.push('Nome de guerra: ' + filtroNome);
+  if (filtroProd) linhasFiltro.push('Produto: ' + filtroProd);
+  linhasFiltro.push('Gerado em: ' + new Date().toLocaleString('pt-BR'));
+
+  doc.setFontSize(9);
+  doc.setTextColor(90, 90, 90);
+  doc.text(linhasFiltro.join('   |   '), 14, 23);
+  doc.setTextColor(0, 0, 0);
+
+  var totalGeral = 0;
+  var linhas = vendas.map(function(v) {
+    totalGeral += v.total;
+    var dataObj = new Date(v.data);
+    var dataFormatada = dataObj.toLocaleDateString('pt-BR') + ' ' + dataObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    var itensStr = v.itens.map(function(it) { return it.qtd + 'x ' + it.nome; }).join(', ');
+    return [dataFormatada, v.nomeGuerra, itensStr, v.codigoConfirmacao, fmtBRL(v.total)];
+  });
+
+  doc.autoTable({
+    startY: 28,
+    head: [['Data', 'Nome de Guerra', 'Itens', 'Código', 'Valor']],
+    body: linhas,
+    styles: { fontSize: 8, cellPadding: 3 },
+    headStyles: { fillColor: [30, 41, 59] },
+    foot: [['', '', '', 'Total (' + vendas.length + ' venda' + (vendas.length > 1 ? 's' : '') + ')', fmtBRL(totalGeral)]],
+    footStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' }
+  });
+
+  doc.save('vendas_' + new Date().toISOString().split('T')[0] + '.pdf');
+  mostrarToast('PDF gerado com ' + vendas.length + ' venda(s)');
+};
+
+// Renderizar histórico de vendas
+window.renderHistoricoVendas = function() {
+  var lista = document.getElementById('vendasLista');
+  
+  if (!estado.vendas || !estado.vendas.length) {
+    lista.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--ink-muted); font-size: 13px;">Nenhuma venda realizada ainda</div>';
+    return;
+  }
+  
+  var vendas = obterVendasFiltradas();
   
   if (!vendas.length) {
     lista.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--ink-muted); font-size: 13px;">Nenhuma venda encontrada com os filtros aplicados</div>';
@@ -1365,7 +1480,10 @@ window.renderHistoricoVendas = function() {
           '<div style="font-size: 11px; color: var(--ink-faint); margin-top: 4px;">' + itensStr + '</div>' +
           '<div class="venda-codigo">🔐 ' + v.codigoConfirmacao + '</div>' +
         '</div>' +
-        '<div class="venda-valor">' + fmtBRL(v.total) + '</div>' +
+        '<div class="venda-acoes">' +
+          '<div class="venda-valor">' + fmtBRL(v.total) + '</div>' +
+          '<button class="btn-excluir-venda" onclick="excluirVenda(\'' + v.id + '\')">🗑️ Excluir</button>' +
+        '</div>' +
       '</div>'
     );
   }).join('');
@@ -1454,6 +1572,67 @@ window.renderRelatorios = function() {
       '</tr>'
     );
   }).join('');
+};
+
+// Gera um PDF com o resumo financeiro e as tabelas exatamente como exibidos na aba Relatórios.
+window.gerarPdfRelatorios = function() {
+  if (!estado.vendas || !estado.vendas.length) {
+    mostrarToast('Nenhuma venda para gerar PDF');
+    return;
+  }
+  if (!window.jspdf || !window.jspdf.jsPDF) { mostrarToast('Biblioteca de PDF ainda carregando, tente novamente'); return; }
+
+  var doc = new window.jspdf.jsPDF();
+
+  doc.setFontSize(14);
+  doc.text('Relatório Financeiro - ' + (estado.config.titulo || 'Autoatendimento'), 14, 16);
+  doc.setFontSize(9);
+  doc.setTextColor(90, 90, 90);
+  doc.text('Gerado em: ' + new Date().toLocaleString('pt-BR'), 14, 23);
+  doc.setTextColor(0, 0, 0);
+
+  doc.autoTable({
+    startY: 28,
+    head: [['Total de Vendas', 'Qtd. de Pedidos', 'Faturamento Total', 'Ticket Médio']],
+    body: [[
+      document.getElementById('statTotalVendas').textContent,
+      document.getElementById('statQtdPedidos').textContent,
+      document.getElementById('statFaturamento').textContent,
+      document.getElementById('statTicketMedio').textContent
+    ]],
+    styles: { fontSize: 9, halign: 'center' },
+    headStyles: { fillColor: [30, 41, 59] }
+  });
+
+  var linhasProdutos = Array.prototype.map.call(
+    document.getElementById('tabelaProdutos').querySelectorAll('tr'),
+    function (tr) { return Array.prototype.map.call(tr.querySelectorAll('td'), function (td) { return td.textContent; }); }
+  );
+  doc.setFontSize(11);
+  doc.text('Top 5 Produtos', 14, doc.lastAutoTable.finalY + 10);
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 14,
+    head: [['Produto', 'Vendas', 'Faturamento', '% Total']],
+    body: linhasProdutos,
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [30, 41, 59] }
+  });
+
+  var linhasDias = Array.prototype.map.call(
+    document.getElementById('tabelaDias').querySelectorAll('tr'),
+    function (tr) { return Array.prototype.map.call(tr.querySelectorAll('td'), function (td) { return td.textContent; }); }
+  );
+  doc.text('Análise Diária (últimos 7 dias)', 14, doc.lastAutoTable.finalY + 10);
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 14,
+    head: [['Data', 'Pedidos', 'Faturamento']],
+    body: linhasDias,
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [30, 41, 59] }
+  });
+
+  doc.save('relatorio_' + new Date().toISOString().split('T')[0] + '.pdf');
+  mostrarToast('PDF do relatório gerado');
 };
 
 window.exportarRelatorios = function() {
