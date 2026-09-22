@@ -333,6 +333,17 @@
   .nome-guerra-field input::placeholder {
     color: var(--ink-faint);
   }
+  .nome-guerra-field input.campo-erro {
+    border-color: var(--danger); animation: shakeCampo .35s;
+  }
+  @keyframes shakeCampo {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+  #btnPagamentoFeito.esmaecido {
+    opacity: .5;
+  }
   
   /* Pop-up de validação */
   .modal-overlay {
@@ -471,7 +482,7 @@
       <label for="nomeGuerraPix">Seu nome de guerra</label>
       <input type="text" id="nomeGuerraPix" placeholder="Digite seu nome" maxlength="30">
     </div>
-    <button class="btn-primary" id="btnPagamentoFeito" onclick="confirmarPagamento()" disabled>Pagamento feito</button>
+    <button class="btn-primary esmaecido" id="btnPagamentoFeito" onclick="confirmarPagamento()">Pagamento feito</button>
     <button class="btn-secondary" onclick="voltarParaCarrinho()">Voltar e editar itens</button>
   </div>
 </div>
@@ -867,6 +878,35 @@ function carregarConfigDaNuvemEmBackground() {
   });
 }
 
+// Mantém estado.vendas sincronizado em tempo real com o Firestore (ouve outros dispositivos).
+var pararEscutaVendas = null;
+function escutarVendasDaNuvem() {
+  if (!firestoreDisponivel) { atualizarIndicadorSync('offline'); return; }
+  if (pararEscutaVendas) return; // já escutando
+  pararEscutaVendas = VENDAS_COL_REF.onSnapshot(function (snapshot) {
+    if (!estado.vendas) estado.vendas = [];
+    var porId = {};
+    estado.vendas.forEach(function (v) { porId[v.id] = v; });
+    var mudou = false;
+    snapshot.forEach(function (doc) {
+      var venda = doc.data();
+      if (!porId[venda.id]) mudou = true;
+      porId[venda.id] = venda;
+    });
+    if (mudou) {
+      estado.vendas = Object.keys(porId).map(function (id) { return porId[id]; });
+      estado.vendas.sort(function (a, b) { return new Date(a.data) - new Date(b.data); });
+      salvarEstado();
+      if (typeof window.renderHistoricoVendas === 'function') window.renderHistoricoVendas();
+      if (typeof window.renderRelatorios === 'function') window.renderRelatorios();
+    }
+    atualizarIndicadorSync('ok');
+  }, function (err) {
+    console.warn('Falha ao escutar vendas do Firestore:', err);
+    atualizarIndicadorSync('erro');
+  });
+}
+
 window.addEventListener('online', flushFilaSync);
 window.addEventListener('offline', function () { atualizarIndicadorSync('offline'); });
 
@@ -1081,6 +1121,11 @@ window.confirmarPagamento = function () {
   // Validar se o nome foi preenchido
   if (!nomeGuerraAtual || !nomeGuerraAtual.trim()) {
     document.getElementById('validationPopup').classList.add('show');
+    var campoNome = document.getElementById('nomeGuerraPix');
+    campoNome.classList.remove('campo-erro');
+    void campoNome.offsetWidth; // reinicia a animação mesmo em cliques repetidos
+    campoNome.classList.add('campo-erro');
+    campoNome.focus();
     return;
   }
 
@@ -1189,7 +1234,8 @@ window.atualizarEstadoBotaoPagamento = function () {
   var nome = nomeField.value.trim();
   
   nomeGuerraAtual = nome;
-  btnPagamento.disabled = !nome;
+  btnPagamento.classList.toggle('esmaecido', !nome);
+  if (nome) nomeField.classList.remove('campo-erro');
 };
 
 window.fecharValidationPopup = function () {
@@ -1543,6 +1589,7 @@ renderTudo();
 // Sync em background: nunca atrasa a primeira renderização (que já usa o cache local).
 flushFilaSync();
 carregarConfigDaNuvemEmBackground();
+escutarVendasDaNuvem();
 
 })();
 </script>
