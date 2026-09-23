@@ -389,10 +389,38 @@
   .prod-row input[type=number] { width: 84px; }
   .prod-row .rm { flex: none; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--danger); }
   .prod-row .rm svg { width: 15px; height: 15px; }
-  .add-prod { display: flex; gap: 8px; margin-top: 10px; }
+  .add-prod { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
   .add-prod input[type=text] { flex: 1; }
   .add-prod input[type=number] { width: 84px; }
   .add-prod button { flex: none; background: var(--frost); color: #06303a; border: none; border-radius: 10px; padding: 0 14px; font-weight: 700; }
+
+  /* Upload de imagem do produto (cadastro) */
+  .prod-img-cell {
+    flex: none; width: 38px; height: 38px; border-radius: 9px;
+    border: 1px dashed var(--line); background: var(--panel-2);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; cursor: pointer; font-size: 15px;
+  }
+  .prod-img-cell img.prod-img-preview { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .prod-img-clear {
+    flex: none; width: 24px; height: 24px; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--panel); color: var(--danger);
+    font-size: 13px; line-height: 1; display: none;
+  }
+
+  /* Imagem do produto no catálogo (grid) */
+  .card .prod-img-wrap {
+    width: 100%; height: 88px; border-radius: 10px; background: var(--panel-2);
+    display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 6px;
+  }
+  .card .prod-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+
+  /* Imagem do produto no carrinho */
+  .cart-row .prod-img-wrap {
+    flex: none; width: 26px; height: 26px; border-radius: 6px; background: var(--panel-2);
+    display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 2px;
+  }
+  .cart-row .prod-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
 
   .toast {
     position: fixed; left: 50%; top: calc(16px + env(safe-area-inset-top, 0px));
@@ -584,6 +612,11 @@
         <div class="section-title">Produtos</div>
         <div id="listaProdutosConfig"></div>
         <div class="add-prod">
+          <label class="prod-img-cell" id="novoProdImagemCell" title="Adicionar imagem">
+            <img class="prod-img-preview" id="novoProdImagemPreview" alt="" style="display:none">
+            <span id="novoProdImagemPlaceholder">🖼️</span>
+            <input type="file" accept="image/*" id="novoProdImagem" hidden>
+          </label>
           <input type="text" id="novoProdNome" placeholder="Nome do produto">
           <input type="number" id="novoProdValor" placeholder="R$" step="0.01" min="0">
           <button onclick="adicionarProdutoConfig()">+</button>
@@ -961,6 +994,32 @@ function fmtDataInputBR(iso) {
 }
 function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 
+// Lê um arquivo de imagem, redimensiona (máx. 400px) e comprime em JPEG,
+// devolvendo um data URL pronto para salvar no produto (localStorage/Firestore).
+function processarImagemProduto(file, callback) {
+  if (!file) { callback(''); return; }
+  var reader = new FileReader();
+  reader.onload = function (e) {
+    var img = new Image();
+    img.onload = function () {
+      var maxDim = 400;
+      var w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+        else { w = Math.round(w * maxDim / h); h = maxDim; }
+      }
+      var canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      callback(canvas.toDataURL('image/jpeg', 0.75));
+    };
+    img.onerror = function () { mostrarToast('Não foi possível ler essa imagem'); callback(''); };
+    img.src = e.target.result;
+  };
+  reader.onerror = function () { mostrarToast('Não foi possível ler essa imagem'); callback(''); };
+  reader.readAsDataURL(file);
+}
+
 function categoriaDoProduto(p) {
   if (p.cat) return p.cat;
   var n = p.nome.toLowerCase();
@@ -1002,11 +1061,13 @@ function renderGrid() {
 
   grid.innerHTML = lista.map(function (p) {
     var qtd = carrinho[p.nome] || 0;
-    var glyph = GLYPHS[categoriaDoProduto(p)] || GLYPHS.outro;
+    var visual = p.imagem
+      ? '<div class="prod-img-wrap"><img class="prod-img" src="' + p.imagem + '" alt=""></div>'
+      : (GLYPHS[categoriaDoProduto(p)] || GLYPHS.outro);
     return (
       '<div class="card' + (qtd > 0 ? ' in-cart' : '') + '" data-nome="' + escHtml(p.nome) + '">' +
         '<div class="badge">' + qtd + '</div>' +
-        glyph +
+        visual +
         '<div class="name">' + escHtml(p.nome) + '</div>' +
         '<div class="price"><span>R$</span>' + Number(p.valor).toFixed(2).replace('.', ',') + '</div>' +
         '<div class="stepper">' +
@@ -1068,10 +1129,12 @@ function renderCartModal() {
 
   list.innerHTML = itens.map(function (it) {
     var prod = estado.produtos.find(function (p) { return p.nome === it.nome; });
-    var glyph = GLYPHS[categoriaDoProduto(prod || { nome: it.nome })] || GLYPHS.outro;
+    var visual = (prod && prod.imagem)
+      ? '<div class="prod-img-wrap"><img class="prod-img" src="' + prod.imagem + '" alt=""></div>'
+      : (GLYPHS[categoriaDoProduto(prod || { nome: it.nome })] || GLYPHS.outro);
     return (
       '<div class="cart-row" data-nome="' + escHtml(it.nome) + '">' +
-        glyph +
+        visual +
         '<div class="info"><div class="name">' + escHtml(it.nome) + '</div><div class="unit">' + fmtBRL(it.valorUnit) + ' / un.</div></div>' +
         '<div class="stepper"><button class="minus">−</button><span class="qty">' + it.qtd + '</span><button class="plus">+</button></div>' +
         '<div class="sub">' + fmtBRL(it.subtotal) + '</div>' +
@@ -1662,10 +1725,17 @@ window.exportarRelatorios = function() {
 function renderListaProdutosConfig() {
   var box = document.getElementById('listaProdutosConfig');
   box.innerHTML = estado.produtos.map(function (p, idx) {
+    var temImg = !!p.imagem;
     return (
-      '<div class="prod-row" data-idx="' + idx + '">' +
+      '<div class="prod-row" data-idx="' + idx + '" data-imagem="' + (p.imagem || '') + '">' +
+        '<label class="prod-img-cell" title="Trocar imagem">' +
+          '<img class="prod-img-preview" src="' + (p.imagem || '') + '" alt="" style="display:' + (temImg ? 'block' : 'none') + '">' +
+          '<span class="prod-img-placeholder" style="display:' + (temImg ? 'none' : 'flex') + '">🖼️</span>' +
+          '<input type="file" accept="image/*" class="pimagem" hidden>' +
+        '</label>' +
         '<input type="text" class="pnome" value="' + escHtml(p.nome) + '">' +
         '<input type="number" class="pvalor" value="' + Number(p.valor).toFixed(2) + '" step="0.01" min="0">' +
+        '<button class="prod-img-clear" aria-label="Remover imagem" style="display:' + (temImg ? 'flex' : 'none') + '; align-items:center; justify-content:center;">×</button>' +
         '<button class="rm" aria-label="Remover produto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg></button>' +
       '</div>'
     );
@@ -1677,17 +1747,70 @@ function renderListaProdutosConfig() {
       renderListaProdutosConfig();
     });
   });
+  Array.prototype.forEach.call(box.querySelectorAll('.pimagem'), function (input) {
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      var row = input.closest('.prod-row');
+      processarImagemProduto(file, function (dataUrl) {
+        if (!dataUrl) return;
+        row.setAttribute('data-imagem', dataUrl);
+        var prev = row.querySelector('.prod-img-preview');
+        var placeholder = row.querySelector('.prod-img-placeholder');
+        var clearBtn = row.querySelector('.prod-img-clear');
+        prev.src = dataUrl; prev.style.display = 'block';
+        placeholder.style.display = 'none';
+        clearBtn.style.display = 'flex';
+      });
+    });
+  });
+  Array.prototype.forEach.call(box.querySelectorAll('.prod-img-clear'), function (btn) {
+    btn.addEventListener('click', function () {
+      var row = btn.closest('.prod-row');
+      row.setAttribute('data-imagem', '');
+      var prev = row.querySelector('.prod-img-preview');
+      prev.src = ''; prev.style.display = 'none';
+      row.querySelector('.prod-img-placeholder').style.display = 'flex';
+      btn.style.display = 'none';
+    });
+  });
 }
+
+var novoProdImagemDataUrl = '';
+(function configurarUploadNovoProduto() {
+  var input = document.getElementById('novoProdImagem');
+  if (!input) return;
+  input.addEventListener('change', function () {
+    var file = input.files && input.files[0];
+    if (!file) return;
+    processarImagemProduto(file, function (dataUrl) {
+      if (!dataUrl) return;
+      novoProdImagemDataUrl = dataUrl;
+      var prev = document.getElementById('novoProdImagemPreview');
+      var placeholder = document.getElementById('novoProdImagemPlaceholder');
+      prev.src = dataUrl; prev.style.display = 'block';
+      placeholder.style.display = 'none';
+    });
+  });
+})();
 
 window.adicionarProdutoConfig = function () {
   var nomeEl = document.getElementById('novoProdNome');
   var valorEl = document.getElementById('novoProdValor');
+  var imagemEl = document.getElementById('novoProdImagem');
   var nome = nomeEl.value.trim();
   var valor = parseFloat(valorEl.value);
   if (!nome) { mostrarToast('Digite o nome do produto'); return; }
   if (!(valor >= 0)) { mostrarToast('Digite um preço válido'); return; }
-  estado.produtos.push({ nome: nome, valor: valor });
-  nomeEl.value = ''; valorEl.value = '';
+  var novoProduto = { nome: nome, valor: valor };
+  if (novoProdImagemDataUrl) novoProduto.imagem = novoProdImagemDataUrl;
+  estado.produtos.push(novoProduto);
+  nomeEl.value = ''; valorEl.value = ''; imagemEl.value = '';
+  novoProdImagemDataUrl = '';
+  var prev = document.getElementById('novoProdImagemPreview');
+  var placeholder = document.getElementById('novoProdImagemPlaceholder');
+  prev.src = ''; prev.style.display = 'none';
+  placeholder.style.display = 'flex';
   renderListaProdutosConfig();
 };
 
@@ -1707,7 +1830,10 @@ window.salvarConfig = function () {
     var valor = parseFloat(row.querySelector('.pvalor').value);
     if (!nome) { erro = 'Todo produto precisa de um nome.'; return; }
     if (!(valor >= 0)) { erro = 'Preço inválido em "' + nome + '".'; return; }
-    novosProdutos.push({ nome: nome, valor: valor });
+    var prod = { nome: nome, valor: valor };
+    var imagem = row.getAttribute('data-imagem');
+    if (imagem) prod.imagem = imagem;
+    novosProdutos.push(prod);
   });
   if (erro) { mostrarToast(erro); return; }
   if (!novosProdutos.length) { mostrarToast('Cadastre ao menos um produto.'); return; }
