@@ -379,6 +379,37 @@
   }
   .codigo-hint { text-align: center; color: var(--ink-muted); font-size: 12.5px; padding: 0 6px; line-height: 1.4; }
   
+  /* Seção de código do pedido (após gerar PIX) */
+  #pixBotaosCodigo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    margin: 20px 0;
+    padding: 0;
+  }
+  #pixBotaosCodigo .codigo-hint {
+    font-size: 13px;
+    color: var(--ink-muted);
+    font-weight: 500;
+    margin-top: 4px;
+  }
+  #pixBotaosCodigo .codigo-box {
+    margin: 12px 0;
+    min-height: 90px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #pixBotaosCodigo > div:last-of-type {
+    text-align: center;
+    color: var(--ink-faint);
+    font-size: 13px;
+    line-height: 1.5;
+    width: 100%;
+    margin: 8px 0;
+  }
+  
   /* Campo de Nome de Guerra */
   .nome-guerra-field {
     margin: 12px 0;
@@ -546,6 +577,10 @@
       </button>
     </div>
     <div id="cartList"></div>
+    <div class="nome-guerra-field">
+      <label for="nomeGuerraCarrinho">Seu nome de guerra</label>
+      <input type="text" id="nomeGuerraCarrinho" placeholder="Digite seu nome" maxlength="30">
+    </div>
     <div id="cartFooter"></div>
   </div>
 </div>
@@ -559,23 +594,54 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
     </div>
+    
+    <!-- Resumo de itens -->
     <div class="pix-summary" id="pixResumo"></div>
+    
+    <!-- Total a pagar -->
     <div class="pix-total">
       <div class="lbl">Total a pagar</div>
       <div class="val" id="pixValor">R$ 0,00</div>
     </div>
-    <div class="copiacola">
-      <textarea id="pixCopiaCola" readonly></textarea>
-      <button class="copy-btn" id="btnCopiarPix" onclick="copiarPix()" aria-label="Copiar código Pix">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-      </button>
+    
+    <!-- Código PIX para copiar -->
+    <div style="margin-top: 20px;">
+      <div style="font-size: 12px; color: var(--ink-muted); margin-bottom: 8px; font-weight: 500;">💰 Código Pix:</div>
+      <div class="copiacola">
+        <textarea id="pixCopiaCola" readonly></textarea>
+        <button class="copy-btn" id="btnCopiarPix" onclick="copiarPix()" aria-label="Copiar código Pix">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
     </div>
-    <div class="nome-guerra-field">
+    
+    <!-- Exibir código do pedido após gerar PIX -->
+    <div id="pixBotaosCodigo" style="display: none;">
+      <div style="width: 100%;">
+        <div class="codigo-hint" style="margin-bottom: 8px;">✓ Código do pedido gerado</div>
+        <div class="codigo-box" id="codigoPedidoNaTelaPixText">000000</div>
+      </div>
+      
+      <div style="width: 100%; text-align: center;">
+        <p style="margin: 0 0 12px; color: var(--ink-muted); font-size: 12.5px; line-height: 1.5;">
+          📱 Mostre este código para a câmera<br>ao lado do freezer
+        </p>
+      </div>
+      
+      <button class="btn-primary" style="width: 100%;" onclick="finalizarPedidoAoMostrarCamera()">Ok, mostrei pra câmera</button>
+    </div>
+    
+    <!-- Campo de nome (oculto após gerar PIX) -->
+    <div class="nome-guerra-field" id="pixNomeField" style="margin-top: 20px;">
       <label for="nomeGuerraPix">Seu nome de guerra</label>
       <input type="text" id="nomeGuerraPix" placeholder="Digite seu nome" maxlength="30">
     </div>
-    <button class="btn-primary esmaecido" id="btnPagamentoFeito" onclick="confirmarPagamento()">Pagamento feito</button>
-    <button class="btn-secondary" onclick="voltarParaCarrinho()">Voltar e editar itens</button>
+    
+    <!-- Botões de ação (ocultos após gerar PIX) -->
+    <div id="pixBotoesOriginais">
+      <button class="btn-primary esmaecido" id="btnPagamentoFeito" onclick="confirmarPagamento()">Gerar código</button>
+      <button class="btn-secondary" onclick="voltarParaCarrinho()">Voltar e editar itens</button>
+    </div>
   </div>
 </div>
 
@@ -594,7 +660,7 @@
       <span id="nomeConfirmacao"></span>
     </div>
     <div class="pix-summary" id="codigoResumo"></div>
-    <button class="btn-primary" onclick="fecharModal('veilCodigo'); mostrarToast('Pronto para o próximo pedido!');">Concluir</button>
+    <button class="btn-primary" onclick="finalizarPedidoCompleto()">Concluir</button>
   </div>
 </div>
 
@@ -1183,6 +1249,8 @@ var carrinho = {};        // { nomeProduto: quantidade }
 var categoriaAtiva = 'todos';
 var ultimoPixTexto = '';
 var nomeGuerraAtual = '';
+var pixJaMontadoNestaSessao = false;  // Flag para evitar registrar venda duas vezes
+var codigoConfirmacaoGerado = '';     // Guardar código gerado
 
 function carregarEstado() {
   var base = { 
@@ -1399,10 +1467,40 @@ function fecharModal(id) { document.getElementById(id).classList.remove('show');
 window.fecharModal = fecharModal;
 
 window.abrirCarrinho = function () { renderCartModal(); abrirModal('veilCarrinho'); };
-window.voltarParaCarrinho = function () { fecharModal('veilPix'); window.abrirCarrinho(); };
+window.voltarParaCarrinho = function () { 
+  // Resetar os elementos do modal de PIX para o estado inicial
+  document.getElementById('pixNomeField').style.display = 'flex';
+  document.getElementById('pixBotoesOriginais').style.display = 'block';
+  document.getElementById('pixBotaosCodigo').style.display = 'none';
+  document.getElementById('nomeGuerraPix').value = '';
+  atualizarEstadoBotaoPagamento();
+  
+  // Resetar flags para permitir nova montagem do PIX se necessário
+  pixJaMontadoNestaSessao = false;
+  codigoConfirmacaoGerado = '';
+  
+  fecharModal('veilPix'); 
+  window.abrirCarrinho(); 
+};
 
 window.irParaPix = function () {
   if (!qtdTotalCarrinho()) return;
+  
+  // Validar nome de guerra preenchido
+  var nomeField = document.getElementById('nomeGuerraCarrinho');
+  var nome = nomeField.value.trim();
+  if (!nome) {
+    nomeField.classList.remove('campo-erro');
+    void nomeField.offsetWidth; // reinicia a animação
+    nomeField.classList.add('campo-erro');
+    nomeField.focus();
+    mostrarToast('Preencha seu nome de guerra para continuar');
+    return;
+  }
+  
+  // Salvar nome no estado global
+  nomeGuerraAtual = nome;
+  
   fecharModal('veilCarrinho');
   montarTelaPix();
   abrirModal('veilPix');
@@ -1460,6 +1558,48 @@ window.confirmarPagamento = function () {
 
   fecharModal('veilPix');
   carrinho = {};
+  renderTudo();
+  abrirModal('veilCodigo');
+};
+
+// Finalizar pedido ao concluir e resetar estado
+window.finalizarPedidoCompleto = function () {
+  fecharModal('veilCodigo');
+  
+  // Resetar estado para próximo pedido
+  pixJaMontadoNestaSessao = false;
+  codigoConfirmacaoGerado = '';
+  nomeGuerraAtual = '';
+  document.getElementById('nomeGuerraCarrinho').value = '';
+  
+  mostrarToast('Pronto para o próximo pedido!');
+  renderTudo();
+};
+
+// Nova função: ao clicar "Pronto, vou mostrar à câmera"
+window.finalizarPedidoAoMostrarCamera = function () {
+  // Limpar carrinho e mostrar modal de confirmação
+  var itens = itensCarrinho();
+  var total = totalCarrinho();
+  var codigo = document.getElementById('codigoPedidoNaTelaPixText').textContent;
+  
+  document.getElementById('codigoConfirmacao').textContent = codigo;
+  document.getElementById('nomeConfirmacao').textContent = 'Policial: ' + escHtml(nomeGuerraAtual);
+  document.getElementById('codigoResumo').innerHTML =
+    itens.map(function (it) {
+      return '<div class="row"><span>' + it.qtd + 'x ' + escHtml(it.nome) + '</span><span>' + fmtBRL(it.subtotal) + '</span></div>';
+    }).join('') +
+    '<div class="row" style="border-top:1px solid var(--line); margin-top:6px; padding-top:8px; font-weight:600;"><span>Total</span><span>' + fmtBRL(total) + '</span></div>';
+
+  fecharModal('veilPix');
+  
+  // Resetar estado para próximo pedido
+  carrinho = {};
+  pixJaMontadoNestaSessao = false;
+  codigoConfirmacaoGerado = '';
+  nomeGuerraAtual = '';
+  document.getElementById('nomeGuerraCarrinho').value = '';
+  
   renderTudo();
   abrirModal('veilCodigo');
 };
@@ -1540,12 +1680,22 @@ function montarTelaPix() {
   ultimoPixTexto = payload;
   document.getElementById('pixCopiaCola').value = payload;
   
-  // Limpar e preparar o campo de nome de guerra
-  nomeGuerraAtual = '';
-  var nomeField = document.getElementById('nomeGuerraPix');
-  nomeField.value = '';
-  nomeField.focus();
-  atualizarEstadoBotaoPagamento();
+  // Gerar código de confirmação, registrar venda e baixar estoque (apenas se não foi feito antes)
+  if (!pixJaMontadoNestaSessao) {
+    var codigo = gerarCodigoConfirmacao();
+    codigoConfirmacaoGerado = codigo;
+    registrarPedido(codigo, itens, total, nomeGuerraAtual);
+    registrarVenda(nomeGuerraAtual, itens, total);
+    pixJaMontadoNestaSessao = true;
+  }
+  
+  // Exibir código no modal de PIX
+  document.getElementById('codigoPedidoNaTelaPixText').textContent = codigoConfirmacaoGerado;
+  
+  // Ocultar campo de nome e botões originais
+  document.getElementById('pixNomeField').style.display = 'none';
+  document.getElementById('pixBotoesOriginais').style.display = 'none';
+  document.getElementById('pixBotaosCodigo').style.display = 'flex';
 }
 
 window.copiarPix = function () {
