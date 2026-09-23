@@ -409,18 +409,10 @@
   }
 
   /* Imagem do produto no catálogo (grid) */
-  .card .prod-img-wrap {
-    width: 100%; height: 88px; border-radius: 10px; background: var(--panel-2);
-    display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 6px;
-  }
-  .card .prod-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .card .prod-img { width: 100%; height: 72px; object-fit: cover; border-radius: 10px; background: var(--panel-2); }
 
   /* Imagem do produto no carrinho */
-  .cart-row .prod-img-wrap {
-    flex: none; width: 26px; height: 26px; border-radius: 6px; background: var(--panel-2);
-    display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 2px;
-  }
-  .cart-row .prod-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .cart-row .prod-img { width: 26px; height: 26px; object-fit: cover; border-radius: 6px; flex: none; }
 
   .toast {
     position: fixed; left: 50%; top: calc(16px + env(safe-area-inset-top, 0px));
@@ -1062,7 +1054,7 @@ function renderGrid() {
   grid.innerHTML = lista.map(function (p) {
     var qtd = carrinho[p.nome] || 0;
     var visual = p.imagem
-      ? '<div class="prod-img-wrap"><img class="prod-img" src="' + p.imagem + '" alt=""></div>'
+      ? '<img class="prod-img" src="' + p.imagem + '" alt="">'
       : (GLYPHS[categoriaDoProduto(p)] || GLYPHS.outro);
     return (
       '<div class="card' + (qtd > 0 ? ' in-cart' : '') + '" data-nome="' + escHtml(p.nome) + '">' +
@@ -1130,7 +1122,7 @@ function renderCartModal() {
   list.innerHTML = itens.map(function (it) {
     var prod = estado.produtos.find(function (p) { return p.nome === it.nome; });
     var visual = (prod && prod.imagem)
-      ? '<div class="prod-img-wrap"><img class="prod-img" src="' + prod.imagem + '" alt=""></div>'
+      ? '<img class="prod-img" src="' + prod.imagem + '" alt="">'
       : (GLYPHS[categoriaDoProduto(prod || { nome: it.nome })] || GLYPHS.outro);
     return (
       '<div class="cart-row" data-nome="' + escHtml(it.nome) + '">' +
@@ -1256,7 +1248,18 @@ function crc16(str) {
   return crc.toString(16).toUpperCase().padStart(4, '0');
 }
 function gerarPayloadPix(opts) {
-  var chave = String(opts.chave || '').trim();
+  var chave = String(opts.chave || '').trim().toUpperCase();
+  // 🔒 Segurança: Detectar se chave é um payload completo e extrair
+  if (chave.startsWith('0002010102')) {
+    console.warn('⚠️ Chave é um payload PIX completo, extraindo...');
+    var chaveExtraida = extrairChavePixDoPayload(chave);
+    if (chaveExtraida && chaveExtraida.length >= 5) {
+      chave = chaveExtraida.toUpperCase();
+    }
+  }
+  if (!chave || chave.length < 5) {
+    chave = 'SEM_CHAVE_CONFIGURADA';
+  }
   var valorStr = Number(opts.valor).toFixed(2);
   var merchantAccount = tlv('00', 'BR.GOV.BCB.PIX') + tlv('01', chave);
   var payload =
@@ -1794,6 +1797,24 @@ var novoProdImagemDataUrl = '';
   });
 })();
 
+// Validação em tempo real para chave PIX
+(function configurarValidacaoChavePix() {
+  var chaveInput = document.getElementById('cfgChave');
+  if (!chaveInput) return;
+  chaveInput.addEventListener('blur', function () {
+    var valor = this.value.trim();
+    if (!valor) return;
+    // Se detectou payload completo, extrai e atualiza campo
+    if (valor.startsWith('0002010102')) {
+      var chaveExtraida = extrairChavePixDoPayload(valor);
+      if (chaveExtraida && chaveExtraida !== valor.toLowerCase()) {
+        this.value = chaveExtraida;
+        mostrarToast('✅ Chave extraída do QR Code. Salve para aplicar.');
+      }
+    }
+  });
+})();
+
 window.adicionarProdutoConfig = function () {
   var nomeEl = document.getElementById('novoProdNome');
   var valorEl = document.getElementById('novoProdValor');
@@ -1820,6 +1841,29 @@ window.restaurarProdutosPadrao = function () {
   mostrarToast('Catálogo padrão restaurado — clique em Salvar para confirmar');
 };
 
+// Extrair chave PIX do payload completo ou validar formato
+function extrairChavePixDoPayload(input) {
+  input = input.trim();
+  // Se é UUID (36 chars com hífens)
+  if (/^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/.test(input)) {
+    return input.toLowerCase();
+  }
+  // Se é payload PIX completo (começa com 0002010102...)
+  if (input.startsWith('0002010102')) {
+    var match = input.match(/0136([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})/i);
+    if (match) {
+      return match[1].toLowerCase();
+    }
+    // Tenta extrair chave por outros padrões (CPF, email, etc.)
+    var tlvMatch = input.match(/(?:0136|01\d{2})([a-zA-Z0-9.@\-\/]+?)(?:\d{2}[0-9a-fA-F]|$)/);
+    if (tlvMatch) {
+      return tlvMatch[1].toLowerCase();
+    }
+  }
+  // Email, CPF, celular ou UUID sem formatação
+  return input.toLowerCase();
+}
+
 window.salvarConfig = function () {
   var box = document.getElementById('listaProdutosConfig');
   var linhas = box.querySelectorAll('.prod-row');
@@ -1838,8 +1882,16 @@ window.salvarConfig = function () {
   if (erro) { mostrarToast(erro); return; }
   if (!novosProdutos.length) { mostrarToast('Cadastre ao menos um produto.'); return; }
 
-  var chave = document.getElementById('cfgChave').value.trim();
-  if (!chave) { mostrarToast('Informe a chave Pix.'); return; }
+  var chaveInput = document.getElementById('cfgChave').value.trim();
+  if (!chaveInput) { mostrarToast('Informe a chave Pix.'); return; }
+  // Extrair chave (UUID, email, CPF, celular) — descarta payload completo
+  var chave = extrairChavePixDoPayload(chaveInput);
+  if (!chave || chave.length < 5) {
+    mostrarToast('Chave Pix inválida. Insira: UUID, e-mail, CPF ou celular.');
+    return;
+  }
+  // Normalizar para uppercase
+  chave = chave.toUpperCase();
 
   estado.produtos = novosProdutos;
   estado.config = {
