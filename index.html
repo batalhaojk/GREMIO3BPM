@@ -348,6 +348,35 @@
     width: 100%; background: transparent; color: var(--ink-muted); border: 1px solid var(--line);
     border-radius: 13px; padding: 13px; font-weight: 600; font-size: 13.5px; margin-top: 10px;
   }
+  
+  /* Aviso de Finalização */
+  .aviso-finalizacao {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--warn) 25%, var(--line));
+    border-radius: 12px;
+    padding: 14px;
+    margin-top: 16px;
+  }
+  .aviso-icon {
+    flex: none;
+    font-size: 20px;
+    line-height: 1.2;
+    margin-top: 2px;
+  }
+  .aviso-texto {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-muted);
+  }
+  .aviso-texto strong {
+    color: var(--warn);
+    font-weight: 600;
+  }
+  
   .cart-empty { text-align: center; padding: 40px 10px; color: var(--ink-faint); }
   .cart-empty svg { width: 44px; height: 44px; margin-bottom: 10px; opacity: .6; }
 
@@ -1448,7 +1477,13 @@ function renderCartModal() {
   footer.innerHTML =
     '<div class="cart-total-row"><span class="lbl">Total</span><span class="val">' + fmtBRL(totalCarrinho()) + '</span></div>' +
     '<button class="btn-primary" onclick="irParaPix()">Finalizar e gerar Pix</button>' +
-    '<button class="btn-secondary" onclick="esvaziarCarrinho()">Esvaziar carrinho</button>';
+    '<div class="aviso-finalizacao">' +
+      '<div class="aviso-icon">⚠️</div>' +
+      '<div class="aviso-texto">' +
+        '<strong>Atenção:</strong> Ao clicar em "Finalizar", a compra será registrada. ' +
+        'O pagamento deve ser efetuado imediatamente no app do seu banco.' +
+      '</div>' +
+    '</div>';
 }
 
 function esvaziarCarrinho() { carrinho = {}; renderTudo(); }
