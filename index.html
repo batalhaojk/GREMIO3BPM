@@ -242,6 +242,30 @@
   .estoque-badge.baixo { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
   .estoque-badge.esgotado { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
   .estoque-badge.nc { background: var(--line); color: var(--ink-muted); }
+
+  /* Conferência / Balanço de Estoque */
+  .conf-resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .conf-tabela-wrap { max-height: 50vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .conf-tabela { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .conf-tabela th { position: sticky; top: 0; background: var(--panel-2); padding: 7px 6px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--line); z-index: 1; white-space: nowrap; }
+  .conf-tabela td { padding: 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .conf-tabela input[type=number] {
+    width: 64px; padding: 5px 6px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); font-family: var(--font-body); font-size: 12px;
+  }
+  .conf-tabela select {
+    padding: 5px 4px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); font-family: var(--font-body); font-size: 11px; max-width: 130px;
+  }
+  .conf-diff { font-weight: 700; }
+  .conf-diff.pos { color: var(--ok); }
+  .conf-diff.neg { color: var(--danger); }
+  .conf-diff.zero { color: var(--ink-muted); }
+  .conf-perda-cel { min-width: 150px; }
+  .conf-hist-tabela-wrap { max-height: 280px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .conf-hist-tabela { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .conf-hist-tabela th { position: sticky; top: 0; background: var(--panel-2); padding: 7px 6px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--line); z-index: 1; white-space: nowrap; }
+  .conf-hist-tabela td { padding: 6px; border-bottom: 1px solid var(--line); }
   .estoque-ajuste { display: flex; align-items: center; gap: 4px; }
   .estoque-ajuste button {
     width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel);
@@ -698,6 +722,49 @@
         </div>
         <button class="btn-primary" onclick="window.salvarEstoque()" style="width: 100%; margin-top: 10px;">Salvar estoque</button>
 
+        <div class="section-title">Balanço / Conferência / Reposição</div>
+        <div style="font-size: 11px; color: var(--ink-faint); margin-bottom: 10px; line-height: 1.4;">
+          Use para conferir fisicamente o expositor, registrar reposições e apurar perdas (quebra, validade vencida, furto etc.).
+        </div>
+        <div class="conf-resumo">
+          <div class="stat-card">
+            <div class="stat-label">Reposições (total)</div>
+            <div class="stat-value" id="statConfReposicoes">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Perdas (unid.)</div>
+            <div class="stat-value" style="color: var(--warn);" id="statConfPerdasUnid">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Perdas (R$)</div>
+            <div class="stat-value" style="color: var(--danger);" id="statConfPerdasValor">R$ 0,00</div>
+          </div>
+        </div>
+        <button class="btn-primary" onclick="window.abrirConferenciaEstoque()" style="width: 100%; margin-bottom: 12px;">🔄 Iniciar Conferência de Estoque</button>
+
+        <div class="section-title">Histórico de Conferências</div>
+        <div class="conf-hist-tabela-wrap">
+          <table class="conf-hist-tabela">
+            <thead>
+              <tr>
+                <th>Data/Hora</th>
+                <th>Produto</th>
+                <th>Anterior</th>
+                <th>Contado</th>
+                <th>Reposto</th>
+                <th>Final</th>
+                <th>Divergência</th>
+                <th>Motivo</th>
+                <th>Perda (R$)</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaHistoricoEstoque">
+              <tr><td colspan="9" style="text-align:center; color: var(--ink-muted); padding: 14px;">Nenhuma conferência registrada ainda</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <button class="btn-secondary" onclick="window.exportarHistoricoEstoqueCSV()" style="width: 100%; margin-top: 10px;">📥 Exportar histórico de conferências (CSV)</button>
+
         <div class="section-title">Consumo por Período</div>
         <div class="filtros-vendas">
           <div class="field">
@@ -831,6 +898,40 @@
   </div>
 </div>
 
+<!-- CONFERÊNCIA / BALANÇO DE ESTOQUE -->
+<div class="modal-veil" id="veilConferencia">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Conferência de Estoque</h2>
+      <button class="sheet-close" onclick="fecharModal('veilConferencia')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="cfg-content">
+      <div style="font-size: 11px; color: var(--ink-faint); margin-bottom: 10px; line-height: 1.4;">
+        Informe a contagem física encontrada no expositor e, se houver, a quantidade de reposição adicionada agora. A diferença é calculada automaticamente. Se a contagem indicar perda, selecione o motivo.
+      </div>
+      <div class="conf-tabela-wrap">
+        <table class="conf-tabela">
+          <thead>
+            <tr>
+              <th>Produto</th>
+              <th>Estoque Sistema</th>
+              <th>Contagem Física</th>
+              <th>Reposição (+)</th>
+              <th>Diferença</th>
+              <th>Motivo (se perda)</th>
+            </tr>
+          </thead>
+          <tbody id="tabelaConferencia"></tbody>
+        </table>
+      </div>
+      <button class="btn-primary" onclick="window.salvarConferenciaEstoque()" style="width: 100%; margin-top: 12px;">Concluir e Salvar Balanço</button>
+      <button class="btn-secondary" onclick="fecharModal('veilConferencia')" style="width: 100%; margin-top: 8px;">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
   <span id="toastMsg"></span>
@@ -865,6 +966,18 @@ var CATEGORIAS = [
   { id: "energetico", label: "Energéticos" },
   { id: "outro", label: "Outros" }
 ];
+
+var MOTIVOS_PERDA = [
+  { valor: '', label: '—' },
+  { valor: 'quebra', label: 'Quebra/Avaria' },
+  { valor: 'validade', label: 'Validade Vencida' },
+  { valor: 'furto', label: 'Consumo Sem Registro / Furto' },
+  { valor: 'ajuste', label: 'Ajuste de Cadastro' }
+];
+function labelMotivoPerda(valor) {
+  var m = MOTIVOS_PERDA.filter(function (x) { return x.valor === valor; })[0];
+  return m ? m.label : '';
+}
 
 var CONFIG_PADRAO = {
   titulo: "Autoatendimento",
@@ -999,7 +1112,7 @@ function sincronizarVendaBackground(venda) {
 
 // Sincroniza config/produtos em background. Sempre mantém localStorage como fonte confiável imediata.
 function sincronizarConfigBackground() {
-  var payload = { produtos: estado.produtos, config: estado.config, atualizadoEm: Date.now() };
+  var payload = { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() };
   if (!firestoreDisponivel) { enfileirarSync('config', payload); atualizarIndicadorSync('offline'); return; }
   atualizarIndicadorSync('sync');
   CONFIG_DOC_REF.set(payload).then(function () {
@@ -1019,6 +1132,7 @@ function carregarConfigDaNuvemEmBackground() {
       var remoto = snap.data();
       if (remoto && Array.isArray(remoto.produtos) && remoto.produtos.length) estado.produtos = remoto.produtos;
       if (remoto && remoto.config) estado.config = Object.assign({}, CONFIG_PADRAO, remoto.config);
+      if (remoto && Array.isArray(remoto.historicoEstoque)) estado.historicoEstoque = remoto.historicoEstoque;
       salvarEstado();
       document.getElementById('tituloTopo').textContent = estado.config.titulo;
       renderTudo();
@@ -1074,13 +1188,15 @@ function carregarEstado() {
   var base = { 
     produtos: PRODUTOS_PADRAO.slice(), 
     config: Object.assign({}, CONFIG_PADRAO),
-    vendas: []
+    vendas: [],
+    historicoEstoque: []
   };
   try {
     var salvo = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
     if (salvo && Array.isArray(salvo.produtos) && salvo.produtos.length) base.produtos = salvo.produtos;
     if (salvo && salvo.config) base.config = Object.assign({}, CONFIG_PADRAO, salvo.config);
     if (salvo && Array.isArray(salvo.vendas)) base.vendas = salvo.vendas;
+    if (salvo && Array.isArray(salvo.historicoEstoque)) base.historicoEstoque = salvo.historicoEstoque;
   } catch (e) { console.warn('Não foi possível carregar configurações salvas:', e); }
   return base;
 }
@@ -1868,6 +1984,8 @@ window.renderEstoque = function () {
       '</div>';
   }
 
+  window.renderResumoHistoricoEstoque();
+
   // Reflete imediatamente o estado "esgotado" na vitrine (badge + desabilita "+").
   renderTudo();
 };
@@ -1887,6 +2005,184 @@ window.salvarEstoque = function () {
   sincronizarConfigBackground();
   renderEstoque();
   mostrarToast('Estoque salvo');
+};
+
+/* ==================== CONFERÊNCIA / BALANÇO / REPOSIÇÃO DE ESTOQUE ==================== */
+
+// Abre o modal de conferência e monta a tabela com o estoque atual de cada produto.
+window.abrirConferenciaEstoque = function () {
+  renderTabelaConferencia();
+  abrirModal('veilConferencia');
+};
+
+function renderTabelaConferencia() {
+  var tbody = document.getElementById('tabelaConferencia');
+  tbody.innerHTML = estado.produtos.map(function (p, idx) {
+    var sistemaAtual = (p.estoque != null && !isNaN(p.estoque)) ? Number(p.estoque) : 0;
+    return (
+      '<tr data-idx="' + idx + '" data-nome="' + escHtml(p.nome) + '" data-sistema="' + sistemaAtual + '">' +
+        '<td>' + escHtml(p.nome) + '</td>' +
+        '<td>' + sistemaAtual + '</td>' +
+        '<td><input type="number" min="0" step="1" class="conf-contagem-input" placeholder="—"></td>' +
+        '<td><input type="number" min="0" step="1" class="conf-reposicao-input" placeholder="0"></td>' +
+        '<td><span class="conf-diff zero" data-conf-diff>—</span></td>' +
+        '<td class="conf-perda-cel">' +
+          '<select class="conf-motivo-select" disabled>' +
+            MOTIVOS_PERDA.map(function (m) { return '<option value="' + m.valor + '">' + m.label + '</option>'; }).join('') +
+          '</select>' +
+        '</td>' +
+      '</tr>'
+    );
+  }).join('');
+
+  // Recalcula a diferença (Contagem Física + Reposição) - Estoque Sistema ao vivo, e libera o motivo quando há perda.
+  Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (tr) {
+    var sistemaAtual = Number(tr.getAttribute('data-sistema'));
+    var contagemInput = tr.querySelector('.conf-contagem-input');
+    var reposicaoInput = tr.querySelector('.conf-reposicao-input');
+    var diffEl = tr.querySelector('[data-conf-diff]');
+    var motivoSelect = tr.querySelector('.conf-motivo-select');
+
+    function recalcular() {
+      if (contagemInput.value === '') {
+        diffEl.textContent = '—';
+        diffEl.className = 'conf-diff zero';
+        motivoSelect.disabled = true;
+        motivoSelect.value = '';
+        return;
+      }
+      var contagem = Number(contagemInput.value) || 0;
+      var reposicao = reposicaoInput.value === '' ? 0 : (Number(reposicaoInput.value) || 0);
+      var diff = (contagem + reposicao) - sistemaAtual;
+      diffEl.textContent = (diff > 0 ? '+' : '') + diff;
+      diffEl.className = 'conf-diff ' + (diff > 0 ? 'pos' : (diff < 0 ? 'neg' : 'zero'));
+      if (diff < 0) {
+        motivoSelect.disabled = false;
+      } else {
+        motivoSelect.disabled = true;
+        motivoSelect.value = '';
+      }
+    }
+    contagemInput.addEventListener('input', recalcular);
+    reposicaoInput.addEventListener('input', recalcular);
+  });
+}
+
+// Processa a conferência: atualiza o estoque de cada produto, registra o histórico e apura perdas.
+window.salvarConferenciaEstoque = function () {
+  var tbody = document.getElementById('tabelaConferencia');
+  if (!estado.historicoEstoque) estado.historicoEstoque = [];
+
+  var registros = [];
+  var pendenteMotivo = null;
+
+  Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (tr) {
+    var contagemInput = tr.querySelector('.conf-contagem-input');
+    if (contagemInput.value === '') return; // item não conferido agora, ignora
+
+    var nome = tr.getAttribute('data-nome');
+    var sistemaAtual = Number(tr.getAttribute('data-sistema'));
+    var contagem = Number(contagemInput.value) || 0;
+    var reposicaoRaw = tr.querySelector('.conf-reposicao-input').value;
+    var reposicao = reposicaoRaw === '' ? 0 : (Number(reposicaoRaw) || 0);
+    var diff = (contagem + reposicao) - sistemaAtual;
+    var motivo = tr.querySelector('.conf-motivo-select').value;
+
+    if (diff < 0 && !motivo && !pendenteMotivo) pendenteMotivo = nome;
+
+    var prod = estado.produtos.find(function (p) { return p.nome === nome; });
+    var custoPerda = (diff < 0 && prod) ? Math.abs(diff) * Number(prod.valor || 0) : 0;
+
+    registros.push({
+      nome: nome, sistemaAtual: sistemaAtual, contagem: contagem, reposicao: reposicao,
+      diff: diff, motivo: motivo, custoPerda: custoPerda, prod: prod
+    });
+  });
+
+  if (!registros.length) { mostrarToast('Informe a contagem física de ao menos um item'); return; }
+  if (pendenteMotivo) { mostrarToast('Selecione o motivo da perda para: ' + pendenteMotivo); return; }
+
+  var agora = new Date().toISOString();
+  registros.forEach(function (r) {
+    if (r.prod) r.prod.estoque = Math.max(0, Math.round(r.contagem + r.reposicao));
+    estado.historicoEstoque.push({
+      data: agora,
+      produto: r.nome,
+      qtdAnterior: r.sistemaAtual,
+      qtdContada: r.contagem,
+      qtdReposta: r.reposicao,
+      estoqueFinal: r.prod ? r.prod.estoque : (r.contagem + r.reposicao),
+      divergencia: r.diff,
+      motivo: r.diff < 0 ? r.motivo : '',
+      custoPerda: r.custoPerda
+    });
+  });
+
+  salvarEstado();
+  sincronizarConfigBackground();
+  fecharModal('veilConferencia');
+  renderEstoque();
+  mostrarToast('Balanço de estoque salvo (' + registros.length + ' item(ns))');
+};
+
+// Resumo de reposições/perdas + tabela de histórico recente, exibidos na aba Estoque.
+window.renderResumoHistoricoEstoque = function () {
+  var hist = estado.historicoEstoque || [];
+
+  var totalReposicoes = 0, totalPerdasUnid = 0, totalPerdasValor = 0;
+  hist.forEach(function (h) {
+    totalReposicoes += Number(h.qtdReposta || 0);
+    if (h.divergencia < 0) {
+      totalPerdasUnid += Math.abs(h.divergencia);
+      totalPerdasValor += Number(h.custoPerda || 0);
+    }
+  });
+  document.getElementById('statConfReposicoes').textContent = totalReposicoes;
+  document.getElementById('statConfPerdasUnid').textContent = totalPerdasUnid;
+  document.getElementById('statConfPerdasValor').textContent = fmtBRL(totalPerdasValor);
+
+  var tbody = document.getElementById('tabelaHistoricoEstoque');
+  if (!hist.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color: var(--ink-muted); padding: 14px;">Nenhuma conferência registrada ainda</td></tr>';
+    return;
+  }
+  var recentes = hist.slice().reverse().slice(0, 50);
+  tbody.innerHTML = recentes.map(function (h) {
+    var diffCls = h.divergencia > 0 ? 'pos' : (h.divergencia < 0 ? 'neg' : 'zero');
+    return (
+      '<tr>' +
+        '<td>' + new Date(h.data).toLocaleString('pt-BR') + '</td>' +
+        '<td>' + escHtml(h.produto) + '</td>' +
+        '<td>' + h.qtdAnterior + '</td>' +
+        '<td>' + h.qtdContada + '</td>' +
+        '<td>' + h.qtdReposta + '</td>' +
+        '<td>' + h.estoqueFinal + '</td>' +
+        '<td class="conf-diff ' + diffCls + '">' + (h.divergencia > 0 ? '+' : '') + h.divergencia + '</td>' +
+        '<td>' + (h.motivo ? escHtml(labelMotivoPerda(h.motivo)) : '—') + '</td>' +
+        '<td>' + (h.custoPerda ? fmtBRL(h.custoPerda) : '—') + '</td>' +
+      '</tr>'
+    );
+  }).join('');
+};
+
+window.exportarHistoricoEstoqueCSV = function () {
+  var hist = estado.historicoEstoque || [];
+  if (!hist.length) { mostrarToast('Nenhuma conferência para exportar'); return; }
+
+  var csv = 'Data/Hora,Produto,Qtd. Anterior,Qtd. Contada,Qtd. Reposta,Estoque Final,Divergencia,Motivo,Perda (R$)\n';
+  hist.forEach(function (h) {
+    csv += '"' + new Date(h.data).toLocaleString('pt-BR') + '","' + h.produto + '",' +
+      h.qtdAnterior + ',' + h.qtdContada + ',' + h.qtdReposta + ',' + h.estoqueFinal + ',' +
+      h.divergencia + ',"' + (h.motivo ? labelMotivoPerda(h.motivo) : '') + '","' + (h.custoPerda || 0).toFixed(2) + '"\n';
+  });
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'conferencia_estoque_' + new Date().toISOString().split('T')[0] + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  mostrarToast('Histórico de conferências exportado em CSV');
 };
 
 // Consolida o consumo (quantidade vendida + faturamento) por item entre duas datas.
