@@ -381,6 +381,11 @@
     width: 100%; background: var(--panel); border: 1px solid var(--line); color: var(--ink);
     border-radius: 10px; padding: 11px 12px; font-size: 14px; font-family: var(--font-body);
   }
+  /* Chave PIX: input alto e monospaced para melhor visualização */
+  #cfgChave {
+    font-family: var(--font-mono) !important; font-size: 13px !important; letter-spacing: 0.3px;
+    padding: 14px 14px !important; min-height: 48px; word-break: break-all;
+  }
   .field-row { display: flex; gap: 10px; }
   .field-row .field { flex: 1; }
   .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin: 22px 0 10px; font-weight: 600; }
@@ -409,7 +414,7 @@
   }
 
   /* Imagem do produto no catálogo (grid) */
-  .card .prod-img { width: 100%; height: 72px; object-fit: cover; border-radius: 10px; background: var(--panel-2); }
+  .card .prod-img { width: 100%; height: 72px; object-fit: contain; border-radius: 10px; background: #fff; }
 
   /* Imagem do produto no carrinho */
   .cart-row .prod-img { width: 26px; height: 26px; object-fit: cover; border-radius: 6px; flex: none; }
@@ -1247,14 +1252,23 @@ function crc16(str) {
   }
   return crc.toString(16).toUpperCase().padStart(4, '0');
 }
+function normalizarChavePix(valor) {
+  var v = String(valor || '').trim();
+  // Chave aleatória (UUID) — o padrão do Banco Central exige minúsculas
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(v)) {
+    return v.toLowerCase();
+  }
+  // Demais tipos de chave (e-mail, CPF, celular) mantêm maiúsculas
+  return v.toUpperCase();
+}
 function gerarPayloadPix(opts) {
-  var chave = String(opts.chave || '').trim().toUpperCase();
+  var chave = normalizarChavePix(opts.chave);
   // 🔒 Segurança: Detectar se chave é um payload completo e extrair
   if (chave.startsWith('0002010102')) {
     console.warn('⚠️ Chave é um payload PIX completo, extraindo...');
     var chaveExtraida = extrairChavePixDoPayload(chave);
     if (chaveExtraida && chaveExtraida.length >= 5) {
-      chave = chaveExtraida.toUpperCase();
+      chave = normalizarChavePix(chaveExtraida);
     }
   }
   if (!chave || chave.length < 5) {
@@ -1844,23 +1858,24 @@ window.restaurarProdutosPadrao = function () {
 // Extrair chave PIX do payload completo ou validar formato
 function extrairChavePixDoPayload(input) {
   input = input.trim();
-  // Se é UUID (36 chars com hífens)
+  // Se é UUID (36 chars com hífens) — PRESERVAR CASE ORIGINAL
   if (/^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/.test(input)) {
-    return input.toLowerCase();
+    return input; // Preservar formato original para compatibilidade com gerador PIX
   }
   // Se é payload PIX completo (começa com 0002010102...)
   if (input.startsWith('0002010102')) {
-    var match = input.match(/0136([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})/i);
-    if (match) {
-      return match[1].toLowerCase();
+    // Procurar por UUID formatado com hífens
+    var uuidMatch = input.match(/([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})/i);
+    if (uuidMatch) {
+      return uuidMatch[1]; // Preservar case original
     }
-    // Tenta extrair chave por outros padrões (CPF, email, etc.)
+    // Tenta extrair chave por outros padrões (CPF, email, etc.) — normalizar apenas se não for UUID
     var tlvMatch = input.match(/(?:0136|01\d{2})([a-zA-Z0-9.@\-\/]+?)(?:\d{2}[0-9a-fA-F]|$)/);
     if (tlvMatch) {
       return tlvMatch[1].toLowerCase();
     }
   }
-  // Email, CPF, celular ou UUID sem formatação
+  // Email, CPF, celular
   return input.toLowerCase();
 }
 
@@ -1890,8 +1905,7 @@ window.salvarConfig = function () {
     mostrarToast('Chave Pix inválida. Insira: UUID, e-mail, CPF ou celular.');
     return;
   }
-  // Normalizar para uppercase
-  chave = chave.toUpperCase();
+  // NOTA: Preservar case original da chave PIX para compatibilidade com geradores de QR Code
 
   estado.produtos = novosProdutos;
   estado.config = {
