@@ -221,6 +221,39 @@
     border-radius: 8px; margin-top: 12px;
   }
 
+  /* ---------- Estoque ---------- */
+  .estoque-resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .estoque-alerta-box {
+    background: color-mix(in srgb, var(--danger) 12%, var(--panel)); border: 1px solid var(--danger);
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; font-size: 12.5px;
+  }
+  .estoque-alerta-box .titulo { font-weight: 700; color: var(--danger); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+  .estoque-alerta-item { display: flex; justify-content: space-between; padding: 3px 0; color: var(--ink); }
+  .estoque-tabela-wrap { max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .estoque-tabela { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .estoque-tabela th { position: sticky; top: 0; background: var(--panel-2); padding: 8px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--line); z-index: 1; }
+  .estoque-tabela td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .estoque-tabela input[type=number] {
+    width: 62px; background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 6px; padding: 5px 6px; font-size: 12px; font-family: var(--font-mono);
+  }
+  .estoque-badge { display: inline-block; padding: 2px 8px; border-radius: var(--radius-pill); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+  .estoque-badge.ok { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+  .estoque-badge.baixo { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+  .estoque-badge.esgotado { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+  .estoque-badge.nc { background: var(--line); color: var(--ink-muted); }
+  .estoque-ajuste { display: flex; align-items: center; gap: 4px; }
+  .estoque-ajuste button {
+    width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--ink); font-size: 13px; line-height: 1; display: flex; align-items: center; justify-content: center; flex: none;
+  }
+  .card .badge-esgotado {
+    position: absolute; top: 10px; left: 10px; background: var(--danger); color: #fff;
+    font-size: 10px; font-weight: 700; border-radius: var(--radius-pill); padding: 2px 7px; letter-spacing: .3px;
+  }
+  .card.esgotado-card { opacity: .55; }
+  .card.esgotado-card .stepper button.plus { opacity: .4; pointer-events: none; }
+
   /* ---------- Cart bar ---------- */
   .cartbar {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
@@ -579,6 +612,7 @@
 
     <div class="cfg-tabs">
       <button class="cfg-btn-aba active" data-aba="aba-cadastro" onclick="window.abrirAbaConfig('aba-cadastro')">📋 Cadastro</button>
+      <button class="cfg-btn-aba" data-aba="aba-estoque" onclick="window.abrirAbaConfig('aba-estoque')">📦 Estoque</button>
       <button class="cfg-btn-aba" data-aba="aba-vendas" onclick="window.abrirAbaConfig('aba-vendas')">💰 Vendas</button>
       <button class="cfg-btn-aba" data-aba="aba-relatorios" onclick="window.abrirAbaConfig('aba-relatorios')">📊 Relatórios</button>
     </div>
@@ -621,6 +655,79 @@
 
         <button class="btn-primary" onclick="salvarConfig()">Salvar</button>
         <button class="btn-secondary" onclick="restaurarProdutosPadrao()">Restaurar catálogo padrão</button>
+      </div>
+    </div>
+
+    <!-- ABA: CONTROLE DE ESTOQUE -->
+    <div class="cfg-aba" id="aba-estoque">
+      <div class="cfg-content">
+        <div class="section-title">Resumo do Estoque</div>
+        <div class="estoque-resumo">
+          <div class="stat-card">
+            <div class="stat-label">Itens controlados</div>
+            <div class="stat-value" id="statEstItensControlados">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Estoque baixo</div>
+            <div class="stat-value" id="statEstBaixo" style="color: var(--warn);">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Esgotados</div>
+            <div class="stat-value" id="statEstEsgotado" style="color: var(--danger);">0</div>
+          </div>
+        </div>
+
+        <div id="estoqueAlertaBox"></div>
+
+        <div class="section-title">Quantidade em Estoque</div>
+        <div class="estoque-tabela-wrap">
+          <table class="estoque-tabela">
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th>Qtd. atual</th>
+                <th>Mín.</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaEstoque"></tbody>
+          </table>
+        </div>
+        <div style="font-size: 11px; color: var(--ink-faint); margin-top: 8px; line-height: 1.4;">
+          Deixe "Qtd. atual" em branco para não controlar o estoque desse item. A quantidade é descontada automaticamente a cada venda confirmada.
+        </div>
+        <button class="btn-primary" onclick="window.salvarEstoque()" style="width: 100%; margin-top: 10px;">Salvar estoque</button>
+
+        <div class="section-title">Consumo por Período</div>
+        <div class="filtros-vendas">
+          <div class="field">
+            <label for="estDataInicio">De</label>
+            <input type="date" id="estDataInicio" class="filtro-input">
+          </div>
+          <div class="field">
+            <label for="estDataFim">Até</label>
+            <input type="date" id="estDataFim" class="filtro-input">
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-bottom: 12px;">
+          <button class="btn-secondary" onclick="window.filtrarConsumoPeriodo()" style="flex:1;">🔍 Consultar consumo</button>
+          <button class="btn-secondary" onclick="window.limparFiltroConsumoPeriodo()" style="flex:1;">Limpar</button>
+        </div>
+        <div class="estoque-tabela-wrap">
+          <table class="estoque-tabela">
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th>Qtd. consumida</th>
+                <th>Faturamento</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaConsumoPeriodo">
+              <tr><td colspan="3" style="text-align:center; color: var(--ink-muted); padding: 14px;">Selecione um período e consulte</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <button class="btn-secondary" onclick="window.exportarConsumoPeriodoCSV()" style="width: 100%; margin-top: 10px;">📥 Exportar consumo do período (CSV)</button>
       </div>
     </div>
 
@@ -1061,9 +1168,12 @@ function renderGrid() {
     var visual = p.imagem
       ? '<img class="prod-img" src="' + p.imagem + '" alt="">'
       : (GLYPHS[categoriaDoProduto(p)] || GLYPHS.outro);
+    var temControle = p.estoque !== undefined && p.estoque !== null && !isNaN(p.estoque);
+    var esgotado = temControle && Number(p.estoque) <= 0;
     return (
-      '<div class="card' + (qtd > 0 ? ' in-cart' : '') + '" data-nome="' + escHtml(p.nome) + '">' +
+      '<div class="card' + (qtd > 0 ? ' in-cart' : '') + (esgotado ? ' esgotado-card' : '') + '" data-nome="' + escHtml(p.nome) + '">' +
         '<div class="badge">' + qtd + '</div>' +
+        (esgotado ? '<div class="badge-esgotado">Esgotado</div>' : '') +
         visual +
         '<div class="name">' + escHtml(p.nome) + '</div>' +
         '<div class="price"><span>R$</span>' + Number(p.valor).toFixed(2).replace('.', ',') + '</div>' +
@@ -1085,7 +1195,13 @@ function renderGrid() {
 
 function mudarQtd(nome, delta) {
   var atual = carrinho[nome] || 0;
-  var novo = Math.max(0, Math.min(99, atual + delta));
+  var teto = 99;
+  var prod = estado.produtos.find(function (p) { return p.nome === nome; });
+  if (prod && prod.estoque !== undefined && prod.estoque !== null && !isNaN(prod.estoque)) {
+    teto = Math.min(teto, Number(prod.estoque));
+    if (delta > 0 && atual >= teto) { mostrarToast('Estoque insuficiente de "' + nome + '"'); return; }
+  }
+  var novo = Math.max(0, Math.min(teto, atual + delta));
   if (novo === 0) delete carrinho[nome]; else carrinho[nome] = novo;
   renderTudo();
 }
@@ -1396,6 +1512,8 @@ window.abrirAbaConfig = function (abaId) {
     renderHistoricoVendas();
   } else if (abaId === 'aba-relatorios') {
     renderRelatorios();
+  } else if (abaId === 'aba-estoque') {
+    renderEstoque();
   }
 };
 
@@ -1413,9 +1531,23 @@ window.registrarVenda = function(nomeGuerra, itens, total) {
   };
   
   estado.vendas.push(venda);
+  baixarEstoquePorVenda(venda);
   salvarEstado();
   sincronizarVendaBackground(venda); // não bloqueia a UI; cai na fila se offline
 };
+
+// Desconta do estoque (quando controlado) as quantidades vendidas. Nunca deixa negativo.
+function baixarEstoquePorVenda(venda) {
+  var mudou = false;
+  venda.itens.forEach(function (it) {
+    var prod = estado.produtos.find(function (p) { return p.nome === it.nome; });
+    if (prod && prod.estoque != null && !isNaN(prod.estoque)) {
+      prod.estoque = Math.max(0, Number(prod.estoque) - Number(it.qtd || 0));
+      mudou = true;
+    }
+  });
+  if (mudou) sincronizarConfigBackground();
+}
 
 // Exclui uma venda (local + Firestore). Pede confirmação antes.
 var idsExcluindoAgora = {};
@@ -1431,9 +1563,11 @@ window.excluirVenda = function(id) {
 
   idsExcluindoAgora[id] = true;
   estado.vendas = estado.vendas.filter(function(v) { return v.id !== id; });
+  repoEstoquePorVendaExcluida(venda);
   salvarEstado();
   renderHistoricoVendas();
   if (typeof window.renderRelatorios === 'function') window.renderRelatorios();
+  if (typeof window.renderEstoque === 'function' && document.getElementById('aba-estoque').classList.contains('active')) window.renderEstoque();
 
   if (!firestoreDisponivel) {
     enfileirarSync('venda_delete', { id: id });
@@ -1452,6 +1586,19 @@ window.excluirVenda = function(id) {
     delete idsExcluindoAgora[id];
   });
 };
+
+// Ao excluir uma venda (ex.: cancelamento), devolve as quantidades ao estoque controlado.
+function repoEstoquePorVendaExcluida(venda) {
+  var mudou = false;
+  venda.itens.forEach(function (it) {
+    var prod = estado.produtos.find(function (p) { return p.nome === it.nome; });
+    if (prod && prod.estoque != null && !isNaN(prod.estoque)) {
+      prod.estoque = Number(prod.estoque) + Number(it.qtd || 0);
+      mudou = true;
+    }
+  });
+  if (mudou) sincronizarConfigBackground();
+}
 
 // Retorna as vendas aplicando os filtros atualmente preenchidos na aba Vendas.
 function obterVendasFiltradas() {
@@ -1652,6 +1799,161 @@ window.renderRelatorios = function() {
       '</tr>'
     );
   }).join('');
+};
+
+/* ==================== CONTROLE DE ESTOQUE ==================== */
+function statusEstoque(p) {
+  if (p.estoque === undefined || p.estoque === null || p.estoque === '' || isNaN(p.estoque)) {
+    return { label: 'Não controlado', cls: 'nc' };
+  }
+  var qtd = Number(p.estoque);
+  if (qtd <= 0) return { label: 'Esgotado', cls: 'esgotado' };
+  if (p.estoqueMin != null && p.estoqueMin !== '' && !isNaN(p.estoqueMin) && qtd <= Number(p.estoqueMin)) {
+    return { label: 'Baixo', cls: 'baixo' };
+  }
+  return { label: 'OK', cls: 'ok' };
+}
+
+window.renderEstoque = function () {
+  var tbody = document.getElementById('tabelaEstoque');
+  var controlados = 0, baixos = 0, esgotados = 0;
+  var alertas = [];
+
+  tbody.innerHTML = estado.produtos.map(function (p, idx) {
+    var st = statusEstoque(p);
+    if (st.cls !== 'nc') controlados++;
+    if (st.cls === 'baixo') { baixos++; alertas.push({ nome: p.nome, qtd: p.estoque, tipo: 'baixo' }); }
+    if (st.cls === 'esgotado') { esgotados++; alertas.push({ nome: p.nome, qtd: p.estoque, tipo: 'esgotado' }); }
+    return (
+      '<tr data-idx="' + idx + '" data-nome="' + escHtml(p.nome) + '">' +
+        '<td>' + escHtml(p.nome) + '</td>' +
+        '<td><input type="number" min="0" step="1" class="est-qtd-input" value="' + (p.estoque != null ? p.estoque : '') + '" placeholder="—"></td>' +
+        '<td><input type="number" min="0" step="1" class="est-min-input" value="' + (p.estoqueMin != null ? p.estoqueMin : '') + '" placeholder="—"></td>' +
+        '<td><span class="estoque-badge ' + st.cls + '" data-badge>' + st.label + '</span></td>' +
+      '</tr>'
+    );
+  }).join('');
+
+  // Atualiza o badge de status ao vivo conforme o usuário digita, antes de salvar.
+  Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (tr) {
+    var qtdInput = tr.querySelector('.est-qtd-input');
+    var minInput = tr.querySelector('.est-min-input');
+    function atualizarBadgeLocal() {
+      var qtdVal = qtdInput.value === '' ? null : Number(qtdInput.value);
+      var minVal = minInput.value === '' ? null : Number(minInput.value);
+      var st2 = statusEstoque({ estoque: qtdVal, estoqueMin: minVal });
+      var badge = tr.querySelector('[data-badge]');
+      badge.className = 'estoque-badge ' + st2.cls;
+      badge.textContent = st2.label;
+    }
+    qtdInput.addEventListener('input', atualizarBadgeLocal);
+    minInput.addEventListener('input', atualizarBadgeLocal);
+  });
+
+  document.getElementById('statEstItensControlados').textContent = controlados;
+  document.getElementById('statEstBaixo').textContent = baixos;
+  document.getElementById('statEstEsgotado').textContent = esgotados;
+
+  var alertaBox = document.getElementById('estoqueAlertaBox');
+  if (!alertas.length) { alertaBox.innerHTML = ''; }
+  else {
+    alertas.sort(function (a, b) { return (a.tipo === 'esgotado' ? 0 : 1) - (b.tipo === 'esgotado' ? 0 : 1); });
+    alertaBox.innerHTML =
+      '<div class="estoque-alerta-box">' +
+        '<div class="titulo">⚠️ Atenção ao estoque</div>' +
+        alertas.map(function (a) {
+          return '<div class="estoque-alerta-item"><span>' + escHtml(a.nome) + '</span><span>' +
+            (a.tipo === 'esgotado' ? 'Esgotado' : (a.qtd + ' un. restante(s)')) + '</span></div>';
+        }).join('') +
+      '</div>';
+  }
+
+  // Reflete imediatamente o estado "esgotado" na vitrine (badge + desabilita "+").
+  renderTudo();
+};
+
+window.salvarEstoque = function () {
+  var tbody = document.getElementById('tabelaEstoque');
+  Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (tr) {
+    var nome = tr.getAttribute('data-nome');
+    var prod = estado.produtos.find(function (p) { return p.nome === nome; });
+    if (!prod) return;
+    var qtdRaw = tr.querySelector('.est-qtd-input').value;
+    var minRaw = tr.querySelector('.est-min-input').value;
+    prod.estoque = qtdRaw === '' ? null : Math.max(0, Math.round(Number(qtdRaw)));
+    prod.estoqueMin = minRaw === '' ? null : Math.max(0, Math.round(Number(minRaw)));
+  });
+  salvarEstado();
+  sincronizarConfigBackground();
+  renderEstoque();
+  mostrarToast('Estoque salvo');
+};
+
+// Consolida o consumo (quantidade vendida + faturamento) por item entre duas datas.
+function obterConsumoPeriodo(dataInicio, dataFim) {
+  var mapa = {};
+  (estado.vendas || []).forEach(function (v) {
+    var datav = new Date(v.data).toISOString().split('T')[0];
+    if (dataInicio && datav < dataInicio) return;
+    if (dataFim && datav > dataFim) return;
+    v.itens.forEach(function (it) {
+      if (!mapa[it.nome]) mapa[it.nome] = { qtd: 0, faturamento: 0 };
+      mapa[it.nome].qtd += it.qtd;
+      mapa[it.nome].faturamento += it.subtotal;
+    });
+  });
+  return mapa;
+}
+
+window.filtrarConsumoPeriodo = function () {
+  var di = document.getElementById('estDataInicio').value;
+  var df = document.getElementById('estDataFim').value;
+  var mapa = obterConsumoPeriodo(di, df);
+  var nomes = Object.keys(mapa).sort(function (a, b) { return mapa[b].qtd - mapa[a].qtd; });
+  var tbody = document.getElementById('tabelaConsumoPeriodo');
+
+  if (!nomes.length) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color: var(--ink-muted); padding: 14px;">Nenhum consumo encontrado nesse período</td></tr>';
+    return;
+  }
+
+  var totalQtd = 0, totalFat = 0;
+  var linhas = nomes.map(function (nome) {
+    totalQtd += mapa[nome].qtd;
+    totalFat += mapa[nome].faturamento;
+    return '<tr><td>' + escHtml(nome) + '</td><td>' + mapa[nome].qtd + '</td><td>' + fmtBRL(mapa[nome].faturamento) + '</td></tr>';
+  }).join('');
+
+  tbody.innerHTML = linhas +
+    '<tr style="font-weight:700; background: var(--panel-2);"><td>Total</td><td>' + totalQtd + '</td><td>' + fmtBRL(totalFat) + '</td></tr>';
+};
+
+window.limparFiltroConsumoPeriodo = function () {
+  document.getElementById('estDataInicio').value = '';
+  document.getElementById('estDataFim').value = '';
+  document.getElementById('tabelaConsumoPeriodo').innerHTML =
+    '<tr><td colspan="3" style="text-align:center; color: var(--ink-muted); padding: 14px;">Selecione um período e consulte</td></tr>';
+};
+
+window.exportarConsumoPeriodoCSV = function () {
+  var di = document.getElementById('estDataInicio').value;
+  var df = document.getElementById('estDataFim').value;
+  var mapa = obterConsumoPeriodo(di, df);
+  var nomes = Object.keys(mapa).sort(function (a, b) { return mapa[b].qtd - mapa[a].qtd; });
+  if (!nomes.length) { mostrarToast('Nenhum consumo para exportar nesse período'); return; }
+
+  var csv = 'Produto,Quantidade Consumida,Faturamento\n';
+  nomes.forEach(function (nome) {
+    csv += '"' + nome + '",' + mapa[nome].qtd + ',"' + mapa[nome].faturamento.toFixed(2) + '"\n';
+  });
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'consumo_' + (di || 'inicio') + '_a_' + (df || 'hoje') + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  mostrarToast('Consumo do período exportado em CSV');
 };
 
 // Gera um PDF com o resumo financeiro e as tabelas exatamente como exibidos na aba Relatórios.
