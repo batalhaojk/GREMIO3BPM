@@ -1192,19 +1192,6 @@ function flushFilaSync() {
   proximo();
 }
 
-// Sincroniza uma venda em background, sem bloquear a UI. Se falhar, entra na fila para retry.
-function sincronizarVendaBackground(venda) {
-  if (!firestoreDisponivel) { enfileirarSync('venda', venda); atualizarIndicadorSync('offline'); return; }
-  atualizarIndicadorSync('sync');
-  VENDAS_COL_REF.doc(venda.id).set(venda).then(function () {
-    atualizarIndicadorSync('ok');
-  }).catch(function (err) {
-    console.warn('Falha ao sincronizar venda com Firestore, salvando na fila:', err);
-    enfileirarSync('venda', venda);
-    atualizarIndicadorSync('offline');
-  });
-}
-
 // Sincroniza config/produtos em background. Sempre mantém localStorage como fonte confiável imediata.
 function sincronizarConfigBackground() {
   var payload = { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() };
@@ -1269,6 +1256,29 @@ function escutarVendasDaNuvem() {
   });
 }
 
+// Mantém estoque/config sincronizados em tempo real com o Firestore (ouve mudanças feitas em outros dispositivos).
+// Importante quando há mais de um dispositivo vendendo ao mesmo tempo: mantém o estoque exibido/validado no
+// carrinho o mais próximo possível do valor real, mesmo entre uma venda e outra.
+var pararEscutaConfig = null;
+function escutarConfigDaNuvem() {
+  if (!firestoreDisponivel) return;
+  if (pararEscutaConfig) return; // já escutando
+  pararEscutaConfig = CONFIG_DOC_REF.onSnapshot(function (snap) {
+    if (!snap.exists) return;
+    var remoto = snap.data();
+    if (remoto && Array.isArray(remoto.produtos) && remoto.produtos.length) {
+      estado.produtos = remoto.produtos;
+    }
+    if (remoto && remoto.config) estado.config = Object.assign({}, CONFIG_PADRAO, remoto.config);
+    if (remoto && Array.isArray(remoto.historicoEstoque)) estado.historicoEstoque = remoto.historicoEstoque;
+    salvarEstado();
+    renderTudo();
+    if (typeof window.renderEstoque === 'function' && document.getElementById('aba-estoque') && document.getElementById('aba-estoque').classList.contains('active')) window.renderEstoque();
+  }, function (err) {
+    console.warn('Falha ao escutar config/estoque do Firestore:', err);
+  });
+}
+
 window.addEventListener('online', flushFilaSync);
 window.addEventListener('offline', function () { atualizarIndicadorSync('offline'); });
 
@@ -1279,6 +1289,7 @@ var categoriaAtiva = 'todos';
 var ultimoPixTexto = '';
 var nomeGuerraAtual = '';
 var pixJaMontadoNestaSessao = false;  // Flag para evitar registrar venda duas vezes
+var vendaAtualId = null;  // Id da venda registrada nesta sessão de Pix, enquanto ainda não foi confirmada/finalizada
 var codigoConfirmacaoGerado = '';     // Guardar código gerado
 
 function carregarEstado() {
@@ -1503,6 +1514,9 @@ window.fecharModal = fecharModal;
 
 window.abrirCarrinho = function () { renderCartModal(); abrirModal('veilCarrinho'); };
 window.voltarParaCarrinho = function () { 
+  // Cancela a venda registrada nesta sessão (se houver), devolvendo o estoque, já que o cliente está reconsiderando o pedido
+  cancelarVendaEmAndamento();
+
   // Resetar os elementos do modal de PIX para o estado inicial
   document.getElementById('pixNomeField').style.display = 'flex';
   document.getElementById('pixBotoesOriginais').style.display = 'block';
@@ -1603,6 +1617,7 @@ window.finalizarPedidoCompleto = function () {
   
   // Resetar estado para próximo pedido
   pixJaMontadoNestaSessao = false;
+  vendaAtualId = null;
   codigoConfirmacaoGerado = '';
   nomeGuerraAtual = '';
   document.getElementById('nomeGuerraCarrinho').value = '';
@@ -1631,6 +1646,7 @@ window.finalizarPedidoAoMostrarCamera = function () {
   // Resetar estado para próximo pedido
   carrinho = {};
   pixJaMontadoNestaSessao = false;
+  vendaAtualId = null;
   codigoConfirmacaoGerado = '';
   nomeGuerraAtual = '';
   document.getElementById('nomeGuerraCarrinho').value = '';
@@ -1720,7 +1736,8 @@ function montarTelaPix() {
     var codigo = gerarCodigoConfirmacao();
     codigoConfirmacaoGerado = codigo;
     registrarPedido(codigo, itens, total, nomeGuerraAtual);
-    registrarVenda(nomeGuerraAtual, itens, total);
+    var vendaRegistrada = registrarVenda(nomeGuerraAtual, itens, total);
+    vendaAtualId = vendaRegistrada ? vendaRegistrada.id : null;
     pixJaMontadoNestaSessao = true;
   }
   
@@ -1818,6 +1835,66 @@ window.abrirAbaConfig = function (abaId) {
   }
 };
 
+// Ajusta um array de produtos aplicando deltas de quantidade por nome. sinal: -1 (venda/baixa) ou +1 (estorno/reposição). Nunca deixa negativo.
+function aplicarDeltasEstoque(produtosArray, itens, sinal) {
+  itens.forEach(function (it) {
+    var prod = produtosArray.find(function (p) { return p.nome === it.nome; });
+    if (prod && prod.estoque != null && !isNaN(prod.estoque)) {
+      prod.estoque = Math.max(0, Number(prod.estoque) + sinal * Number(it.qtd || 0));
+    }
+  });
+}
+
+// Registra a venda e baixa o estoque de forma atômica no Firestore (transação): lê o estoque mais atual do
+// servidor e só então decrementa, evitando que duas vendas simultâneas em dispositivos diferentes "percam"
+// uma a outra (last-write-wins) e o sistema acabe achando que existe mais estoque do que realmente há.
+function registrarVendaTransacional(venda) {
+  if (!firestoreDisponivel) return Promise.reject(new Error('Firestore indisponível'));
+  var vendaRef = VENDAS_COL_REF.doc(venda.id);
+  return db.runTransaction(function (transaction) {
+    return transaction.get(CONFIG_DOC_REF).then(function (configSnap) {
+      var dados = configSnap.exists ? configSnap.data() : { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [] };
+      var produtos = (dados.produtos || []).map(function (p) { return Object.assign({}, p); });
+      aplicarDeltasEstoque(produtos, venda.itens, -1);
+      var atualizado = Object.assign({}, dados, { produtos: produtos, atualizadoEm: Date.now() });
+      transaction.set(CONFIG_DOC_REF, atualizado);
+      transaction.set(vendaRef, venda);
+      return produtos;
+    });
+  });
+}
+
+// Exclui a venda e repõe o estoque de forma atômica no Firestore (transação): confirma que a venda ainda
+// existe antes de repor, para que duas exclusões simultâneas da mesma venda (em dois dispositivos) nunca
+// devolvam o estoque em dobro.
+function excluirVendaTransacional(vendaId, itens) {
+  if (!firestoreDisponivel) return Promise.reject(new Error('Firestore indisponível'));
+  var vendaRef = VENDAS_COL_REF.doc(vendaId);
+  return db.runTransaction(function (transaction) {
+    return transaction.get(vendaRef).then(function (vendaSnap) {
+      if (!vendaSnap.exists) return null; // já foi excluída (por este ou outro dispositivo) — não repor de novo
+      return transaction.get(CONFIG_DOC_REF).then(function (configSnap) {
+        var dados = configSnap.exists ? configSnap.data() : { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [] };
+        var produtos = (dados.produtos || []).map(function (p) { return Object.assign({}, p); });
+        aplicarDeltasEstoque(produtos, itens, +1);
+        var atualizado = Object.assign({}, dados, { produtos: produtos, atualizadoEm: Date.now() });
+        transaction.set(CONFIG_DOC_REF, atualizado);
+        transaction.delete(vendaRef);
+        return produtos;
+      });
+    });
+  });
+}
+
+// Aplica no estado local o resultado autoritativo (confirmado pelo servidor) de um ajuste de estoque.
+function aplicarProdutosSincronizados(produtos) {
+  if (!Array.isArray(produtos)) return;
+  estado.produtos = produtos;
+  salvarEstado();
+  renderTudo();
+  if (typeof window.renderEstoque === 'function' && document.getElementById('aba-estoque') && document.getElementById('aba-estoque').classList.contains('active')) window.renderEstoque();
+}
+
 // Função para registrar venda confirmada
 window.registrarVenda = function(nomeGuerra, itens, total) {
   if (!estado.vendas) estado.vendas = [];
@@ -1832,22 +1909,65 @@ window.registrarVenda = function(nomeGuerra, itens, total) {
   };
   
   estado.vendas.push(venda);
-  baixarEstoquePorVenda(venda);
+  baixarEstoquePorVenda(venda); // baixa local otimista, para não travar a tela do cliente
   salvarEstado();
-  sincronizarVendaBackground(venda); // não bloqueia a UI; cai na fila se offline
+
+  if (firestoreDisponivel) {
+    atualizarIndicadorSync('sync');
+    registrarVendaTransacional(venda).then(function (produtosAtualizados) {
+      aplicarProdutosSincronizados(produtosAtualizados);
+      atualizarIndicadorSync('ok');
+    }).catch(function (err) {
+      console.warn('Falha ao confirmar venda/baixa de estoque na nuvem, salvando na fila:', err);
+      enfileirarSync('venda', venda);
+      enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
+      atualizarIndicadorSync('offline');
+    });
+  } else {
+    enfileirarSync('venda', venda);
+    atualizarIndicadorSync('offline');
+  }
+
+  return venda;
 };
 
-// Desconta do estoque (quando controlado) as quantidades vendidas. Nunca deixa negativo.
-function baixarEstoquePorVenda(venda) {
-  var mudou = false;
-  venda.itens.forEach(function (it) {
-    var prod = estado.produtos.find(function (p) { return p.nome === it.nome; });
-    if (prod && prod.estoque != null && !isNaN(prod.estoque)) {
-      prod.estoque = Math.max(0, Number(prod.estoque) - Number(it.qtd || 0));
-      mudou = true;
+// Cancela a venda registrada nesta sessão de Pix (ex.: cliente volta ao carrinho antes de confirmar/pagar), devolvendo o estoque.
+function cancelarVendaEmAndamento() {
+  if (!vendaAtualId || !estado.vendas) { vendaAtualId = null; return; }
+  var idx = estado.vendas.findIndex(function (v) { return v.id === vendaAtualId; });
+  if (idx !== -1) {
+    var venda = estado.vendas[idx];
+    repoEstoquePorVendaExcluida(venda); // reposição local otimista
+    estado.vendas.splice(idx, 1);
+    salvarEstado();
+    idsExcluindoAgora[venda.id] = true;
+    if (firestoreDisponivel) {
+      excluirVendaTransacional(venda.id, venda.itens).then(function (produtosAtualizados) {
+        if (produtosAtualizados) aplicarProdutosSincronizados(produtosAtualizados);
+        delete idsExcluindoAgora[venda.id];
+      }).catch(function (err) {
+        console.warn('Falha ao cancelar venda em andamento no Firestore:', err);
+        enfileirarSync('venda_delete', { id: venda.id });
+        enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
+        delete idsExcluindoAgora[venda.id];
+      });
+    } else {
+      enfileirarSync('venda_delete', { id: venda.id });
+      enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
+      delete idsExcluindoAgora[venda.id];
     }
-  });
-  if (mudou) sincronizarConfigBackground();
+    if (typeof window.renderHistoricoVendas === 'function') window.renderHistoricoVendas();
+    if (typeof window.renderRelatorios === 'function') window.renderRelatorios();
+    if (typeof window.renderEstoque === 'function' && document.getElementById('aba-estoque').classList.contains('active')) window.renderEstoque();
+  }
+  vendaAtualId = null;
+}
+
+// Desconta do estoque (quando controlado) as quantidades vendidas. Nunca deixa negativo. Aplicação local
+// otimista/imediata; quando online, o valor definitivo vem de registrarVendaTransacional (evita perda de
+// atualização quando duas vendas concorrem em dispositivos diferentes).
+function baixarEstoquePorVenda(venda) {
+  aplicarDeltasEstoque(estado.produtos, venda.itens, -1);
 }
 
 // Exclui uma venda (local + Firestore). Pede confirmação antes.
@@ -1864,7 +1984,7 @@ window.excluirVenda = function(id) {
 
   idsExcluindoAgora[id] = true;
   estado.vendas = estado.vendas.filter(function(v) { return v.id !== id; });
-  repoEstoquePorVendaExcluida(venda);
+  repoEstoquePorVendaExcluida(venda); // reposição local otimista
   salvarEstado();
   renderHistoricoVendas();
   if (typeof window.renderRelatorios === 'function') window.renderRelatorios();
@@ -1872,17 +1992,20 @@ window.excluirVenda = function(id) {
 
   if (!firestoreDisponivel) {
     enfileirarSync('venda_delete', { id: id });
+    enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
     atualizarIndicadorSync('offline');
     delete idsExcluindoAgora[id];
     return;
   }
   atualizarIndicadorSync('sync');
-  VENDAS_COL_REF.doc(id).delete().then(function () {
+  excluirVendaTransacional(id, venda.itens).then(function (produtosAtualizados) {
+    if (produtosAtualizados) aplicarProdutosSincronizados(produtosAtualizados);
     atualizarIndicadorSync('ok');
     delete idsExcluindoAgora[id];
   }).catch(function (err) {
     console.warn('Falha ao excluir venda no Firestore, salvando na fila:', err);
     enfileirarSync('venda_delete', { id: id });
+    enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
     atualizarIndicadorSync('offline');
     delete idsExcluindoAgora[id];
   });
@@ -1890,15 +2013,7 @@ window.excluirVenda = function(id) {
 
 // Ao excluir uma venda (ex.: cancelamento), devolve as quantidades ao estoque controlado.
 function repoEstoquePorVendaExcluida(venda) {
-  var mudou = false;
-  venda.itens.forEach(function (it) {
-    var prod = estado.produtos.find(function (p) { return p.nome === it.nome; });
-    if (prod && prod.estoque != null && !isNaN(prod.estoque)) {
-      prod.estoque = Number(prod.estoque) + Number(it.qtd || 0);
-      mudou = true;
-    }
-  });
-  if (mudou) sincronizarConfigBackground();
+  aplicarDeltasEstoque(estado.produtos, venda.itens, +1);
 }
 
 // Retorna as vendas aplicando os filtros atualmente preenchidos na aba Vendas.
@@ -2744,6 +2859,7 @@ renderTudo();
 flushFilaSync();
 carregarConfigDaNuvemEmBackground();
 escutarVendasDaNuvem();
+escutarConfigDaNuvem();
 
 })();
 </script>
