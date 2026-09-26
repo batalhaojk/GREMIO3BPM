@@ -1580,8 +1580,8 @@ window.confirmarPagamento = function () {
   var total = totalCarrinho();
   var codigo = gerarCodigoConfirmacao();
 
+  // NOTA: registrarVenda (e a baixa de estoque) já foram executados em montarTelaPix()
   registrarPedido(codigo, itens, total, nomeGuerraAtual);
-  registrarVenda(nomeGuerraAtual, itens, total);
 
   document.getElementById('codigoConfirmacao').textContent = codigo;
   document.getElementById('nomeConfirmacao').textContent = 'Policial: ' + escHtml(nomeGuerraAtual);
