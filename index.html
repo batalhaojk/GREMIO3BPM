@@ -539,6 +539,17 @@
   .prod-row input[type=number] { width: 84px; }
   .prod-row .rm { flex: none; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--danger); }
   .prod-row .rm svg { width: 15px; height: 15px; }
+  .pos-ctl { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .pos-ctl button {
+    width: 34px; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); color: var(--ink); font-size: 10px; line-height: 1; cursor: pointer;
+  }
+  .pos-ctl button:active { background: var(--accent); color: var(--accent-ink); }
+  .prod-row .pos-ctl input.ppos {
+    width: 34px; height: 22px; padding: 0; text-align: center; font-family: var(--font-mono);
+    font-weight: 700; font-size: 13px; -moz-appearance: textfield;
+  }
+  .pos-ctl input.ppos::-webkit-outer-spin-button, .pos-ctl input.ppos::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .add-prod { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
   .add-prod input[type=text] { flex: 1; }
   .add-prod input[type=number] { width: 84px; }
@@ -2737,12 +2748,59 @@ window.exportarRelatorios = function() {
   mostrarToast('Dados exportados em CSV');
 };
 
+// Reordenação por número de posição (▲ / ▼ ou digitando o número).
+// A ordem das linhas no DOM é a ordem salva em salvarConfig() e exibida no catálogo.
+function sincronizarOrdemProdutos(box) {
+  var linhas = box.querySelectorAll('.prod-row');
+  var anterior = estado.produtos.slice();
+  var novaOrdem = [];
+  Array.prototype.forEach.call(linhas, function (r) {
+    novaOrdem.push(anterior[Number(r.getAttribute('data-idx'))]);
+  });
+  estado.produtos = novaOrdem;
+  Array.prototype.forEach.call(linhas, function (r, i) {
+    r.setAttribute('data-idx', i);
+    r.querySelector('.ppos').value = i + 1;
+  });
+}
+function moverProdutoPara(box, row, destino) {
+  var linhas = Array.prototype.slice.call(box.querySelectorAll('.prod-row'));
+  var n = linhas.length;
+  destino = Math.max(0, Math.min(n - 1, destino));
+  var atual = linhas.indexOf(row);
+  if (destino === atual) { row.querySelector('.ppos').value = atual + 1; return; }
+  var outras = linhas.filter(function (r) { return r !== row; });
+  if (destino >= outras.length) box.appendChild(row);
+  else box.insertBefore(row, outras[destino]);
+  sincronizarOrdemProdutos(box);
+  if (row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+}
+function iniciarReordenacaoProdutos(box) {
+  if (box._posInit) return;
+  box._posInit = true;
+  box.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.pos-up, .pos-down') : null;
+    if (!btn) return;
+    var row = btn.closest('.prod-row');
+    var i = Number(row.getAttribute('data-idx'));
+    moverProdutoPara(box, row, btn.classList.contains('pos-up') ? i - 1 : i + 1);
+  });
+  box.addEventListener('change', function (e) {
+    if (!e.target.classList || !e.target.classList.contains('ppos')) return;
+    var row = e.target.closest('.prod-row');
+    var v = parseInt(e.target.value, 10);
+    if (isNaN(v)) { e.target.value = Number(row.getAttribute('data-idx')) + 1; return; }
+    moverProdutoPara(box, row, v - 1);
+  });
+}
+
 function renderListaProdutosConfig() {
   var box = document.getElementById('listaProdutosConfig');
   box.innerHTML = estado.produtos.map(function (p, idx) {
     var temImg = !!p.imagem;
     return (
       '<div class="prod-row" data-idx="' + idx + '" data-imagem="' + (p.imagem || '') + '">' +
+        '<div class="pos-ctl"><button type="button" class="pos-up" aria-label="Subir">▲</button><input type="number" class="ppos" min="1" value="' + (idx + 1) + '" inputmode="numeric" aria-label="Posição"><button type="button" class="pos-down" aria-label="Descer">▼</button></div>' +
         '<label class="prod-img-cell" title="Trocar imagem">' +
           '<img class="prod-img-preview" src="' + (p.imagem || '') + '" alt="" style="display:' + (temImg ? 'block' : 'none') + '">' +
           '<span class="prod-img-placeholder" style="display:' + (temImg ? 'none' : 'flex') + '">🖼️</span>' +
@@ -2756,6 +2814,7 @@ function renderListaProdutosConfig() {
       '</div>'
     );
   }).join('');
+  iniciarReordenacaoProdutos(box);
   Array.prototype.forEach.call(box.querySelectorAll('.rm'), function (btn) {
     btn.addEventListener('click', function () {
       var idx = Number(btn.closest('.prod-row').getAttribute('data-idx'));
