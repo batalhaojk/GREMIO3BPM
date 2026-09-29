@@ -491,6 +491,34 @@
     border-radius: 10px; padding: 12px 24px; font-weight: 700; font-size: 14px;
   }
 
+  /* Pop-up grande: código Pix copiado */
+  .pix-copiado-overlay {
+    position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.78);
+    display: none; align-items: center; justify-content: center; padding: 16px;
+  }
+  .pix-copiado-overlay.show { display: flex; }
+  .pix-copiado-popup {
+    background: var(--bg); border: 3px solid var(--ok); border-radius: 22px;
+    padding: 28px 22px 22px; width: 100%; max-width: 400px; text-align: center;
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--ok) 25%, transparent), 0 24px 60px rgba(0,0,0,.55);
+    animation: pixPop .35s ease-out, pixGlow 1.6s ease-in-out infinite .35s;
+  }
+  .pix-copiado-popup .icone {
+    width: 84px; height: 84px; margin: 0 auto 14px; border-radius: 50%;
+    background: var(--ok); color: #fff; font-size: 52px; line-height: 84px; font-weight: 800;
+  }
+  .pix-copiado-popup.falha { border-color: var(--warn); }
+  .pix-copiado-popup.falha .icone { background: var(--warn); }
+  .pix-copiado-popup h3 { font-size: 26px; font-weight: 800; margin: 0 0 10px; color: var(--ink); letter-spacing: .3px; }
+  .pix-copiado-popup .proximo { font-size: 16px; font-weight: 700; color: var(--ink); margin: 0 0 6px; }
+  .pix-copiado-popup p { font-size: 15px; color: var(--ink-muted); margin: 0 0 18px; line-height: 1.5; }
+  .pix-copiado-popup button {
+    width: 100%; background: var(--accent); color: var(--accent-ink); border: none;
+    border-radius: 12px; padding: 16px; font-weight: 800; font-size: 17px;
+  }
+  @keyframes pixPop { from { transform: scale(.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @keyframes pixGlow { 0%,100% { transform: scale(1); } 50% { transform: scale(1.03); } }
+
   /* ---------- Settings ---------- */
   .field { margin-bottom: 12px; }
   .field label { display: block; font-size: 12px; color: var(--ink-muted); margin-bottom: 5px; font-weight: 500; }
@@ -699,6 +727,17 @@
     <h3>⚠️ Nome obrigatório</h3>
     <p>Por favor, preencha seu nome de guerra antes de confirmar o pagamento.</p>
     <button onclick="fecharValidationPopup()">Entendido</button>
+  </div>
+</div>
+
+<!-- POP-UP: CÓDIGO PIX COPIADO -->
+<div class="pix-copiado-overlay" id="pixCopiadoPopup">
+  <div class="pix-copiado-popup" id="pixCopiadoBox">
+    <div class="icone" id="pixCopiadoIcone">✓</div>
+    <h3 id="pixCopiadoTitulo">CÓDIGO PIX COPIADO!</h3>
+    <div class="proximo">Próximo passo:</div>
+    <p id="pixCopiadoTexto">Abra o aplicativo do seu banco, cole o código em <strong>Pix Copia e Cola</strong> e realize o pagamento. Depois volte aqui e encerre o procedimento.</p>
+    <button onclick="fecharPixCopiadoPopup()">Entendi</button>
   </div>
 </div>
 
@@ -1152,6 +1191,8 @@ function processarItemFila(item) {
     return VENDAS_COL_REF.doc(item.payload.id).set(item.payload);
   }
   if (item.tipo === 'venda_delete') {
+    // Transacional: só repõe estoque se a venda ainda existir no servidor (evita reposição em dobro)
+    if (Array.isArray(item.payload.itens)) return excluirVendaTransacional(item.payload.id, item.payload.itens);
     return VENDAS_COL_REF.doc(item.payload.id).delete();
   }
   if (item.tipo === 'config') {
@@ -1228,6 +1269,7 @@ function carregarConfigDaNuvemEmBackground() {
 
 // Mantém estado.vendas sincronizado em tempo real com o Firestore (ouve outros dispositivos).
 var pararEscutaVendas = null;
+var idsRegistrandoAgora = {}; // vendas locais ainda não confirmadas no servidor
 function escutarVendasDaNuvem() {
   if (!firestoreDisponivel) { atualizarIndicadorSync('offline'); return; }
   if (pararEscutaVendas) return; // já escutando
@@ -1236,12 +1278,24 @@ function escutarVendasDaNuvem() {
     var porId = {};
     estado.vendas.forEach(function (v) { porId[v.id] = v; });
     var mudou = false;
+    var idsServidor = {};
     snapshot.forEach(function (doc) {
       var venda = doc.data();
+      idsServidor[venda.id] = true;
       if (idsExcluindoAgora[venda.id]) return; // exclusão em andamento neste dispositivo, ignora
       if (!porId[venda.id]) mudou = true;
       porId[venda.id] = venda;
     });
+    // Remove localmente vendas que não existem mais no servidor (excluídas por outro administrador),
+    // preservando as que ainda estão pendentes de envio.
+    if (!snapshot.metadata.fromCache) {
+      var pendentes = {};
+      lerFilaSync().forEach(function (it) { if (it.tipo === 'venda' && it.payload) pendentes[it.payload.id] = true; });
+      Object.keys(idsRegistrandoAgora).forEach(function (id) { pendentes[id] = true; });
+      Object.keys(porId).forEach(function (id) {
+        if (!idsServidor[id] && !pendentes[id] && !idsExcluindoAgora[id]) { delete porId[id]; mudou = true; }
+      });
+    }
     if (mudou) {
       estado.vendas = Object.keys(porId).map(function (id) { return porId[id]; });
       estado.vendas.sort(function (a, b) { return new Date(a.data) - new Date(b.data); });
@@ -1553,6 +1607,8 @@ window.irParaPix = function () {
   fecharModal('veilCarrinho');
   montarTelaPix();
   abrirModal('veilPix');
+  // Ainda dentro do clique (permite acessar a área de transferência): copia o Pix e avisa em destaque.
+  mostrarPixCopiadoPopup(copiarPixParaAreaTransferencia());
 };
 
 function gerarCodigoConfirmacao() {
@@ -1750,12 +1806,32 @@ function montarTelaPix() {
   document.getElementById('pixBotaosCodigo').style.display = 'flex';
 }
 
-window.copiarPix = function () {
+function copiarPixParaAreaTransferencia() {
   var ta = document.getElementById('pixCopiaCola');
   ta.select(); ta.setSelectionRange(0, 99999);
   var ok = false;
   try { ok = document.execCommand('copy'); } catch (e) {}
   if (!ok && navigator.clipboard) { navigator.clipboard.writeText(ultimoPixTexto).catch(function () {}); ok = true; }
+  return ok;
+}
+
+// Pop-up grande e chamativo exibido ao abrir a tela do Pix.
+function mostrarPixCopiadoPopup(ok) {
+  var box = document.getElementById('pixCopiadoBox');
+  box.classList.toggle('falha', !ok);
+  document.getElementById('pixCopiadoIcone').textContent = ok ? '✓' : '!';
+  document.getElementById('pixCopiadoTitulo').textContent = ok ? 'CÓDIGO PIX COPIADO!' : 'COPIE O CÓDIGO PIX';
+  document.getElementById('pixCopiadoTexto').innerHTML = ok
+    ? 'Abra o aplicativo do seu banco, cole o código em <strong>Pix Copia e Cola</strong> e realize o pagamento. Depois volte aqui e encerre o procedimento.'
+    : 'Não foi possível copiar automaticamente. Toque no botão de copiar ao lado do código, pague no aplicativo do seu banco e depois volte aqui para encerrar o procedimento.';
+  document.getElementById('pixCopiadoPopup').classList.add('show');
+}
+window.fecharPixCopiadoPopup = function () {
+  document.getElementById('pixCopiadoPopup').classList.remove('show');
+};
+
+window.copiarPix = function () {
+  var ok = copiarPixParaAreaTransferencia();
   var btn = document.getElementById('btnCopiarPix');
   btn.classList.add('done');
   setTimeout(function () { btn.classList.remove('done'); }, 1400);
@@ -1914,10 +1990,13 @@ window.registrarVenda = function(nomeGuerra, itens, total) {
 
   if (firestoreDisponivel) {
     atualizarIndicadorSync('sync');
+    idsRegistrandoAgora[venda.id] = true;
     registrarVendaTransacional(venda).then(function (produtosAtualizados) {
+      delete idsRegistrandoAgora[venda.id];
       aplicarProdutosSincronizados(produtosAtualizados);
       atualizarIndicadorSync('ok');
     }).catch(function (err) {
+      delete idsRegistrandoAgora[venda.id];
       console.warn('Falha ao confirmar venda/baixa de estoque na nuvem, salvando na fila:', err);
       enfileirarSync('venda', venda);
       enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
@@ -1947,13 +2026,11 @@ function cancelarVendaEmAndamento() {
         delete idsExcluindoAgora[venda.id];
       }).catch(function (err) {
         console.warn('Falha ao cancelar venda em andamento no Firestore:', err);
-        enfileirarSync('venda_delete', { id: venda.id });
-        enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
+        enfileirarSync('venda_delete', { id: venda.id, itens: venda.itens });
         delete idsExcluindoAgora[venda.id];
       });
     } else {
-      enfileirarSync('venda_delete', { id: venda.id });
-      enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
+      enfileirarSync('venda_delete', { id: venda.id, itens: venda.itens });
       delete idsExcluindoAgora[venda.id];
     }
     if (typeof window.renderHistoricoVendas === 'function') window.renderHistoricoVendas();
@@ -1983,31 +2060,40 @@ window.excluirVenda = function(id) {
   if (!confirmado) return;
 
   idsExcluindoAgora[id] = true;
-  estado.vendas = estado.vendas.filter(function(v) { return v.id !== id; });
-  repoEstoquePorVendaExcluida(venda); // reposição local otimista
-  salvarEstado();
-  renderHistoricoVendas();
-  if (typeof window.renderRelatorios === 'function') window.renderRelatorios();
-  if (typeof window.renderEstoque === 'function' && document.getElementById('aba-estoque').classList.contains('active')) window.renderEstoque();
 
-  if (!firestoreDisponivel) {
-    enfileirarSync('venda_delete', { id: id });
-    enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
+  function atualizarTelas() {
+    salvarEstado();
+    renderHistoricoVendas();
+    if (typeof window.renderRelatorios === 'function') window.renderRelatorios();
+    if (typeof window.renderEstoque === 'function' && document.getElementById('aba-estoque').classList.contains('active')) window.renderEstoque();
+  }
+  function removerLocal() { estado.vendas = estado.vendas.filter(function(v) { return v.id !== id; }); }
+  // Sem conexão: aplica localmente e enfileira a exclusão transacional (o servidor decide se repõe o estoque).
+  function excluirOffline() {
+    removerLocal();
+    repoEstoquePorVendaExcluida(venda);
+    atualizarTelas();
+    enfileirarSync('venda_delete', { id: id, itens: venda.itens });
     atualizarIndicadorSync('offline');
     delete idsExcluindoAgora[id];
-    return;
   }
+
+  if (!firestoreDisponivel) { excluirOffline(); return; }
+
   atualizarIndicadorSync('sync');
   excluirVendaTransacional(id, venda.itens).then(function (produtosAtualizados) {
-    if (produtosAtualizados) aplicarProdutosSincronizados(produtosAtualizados);
+    removerLocal();
+    if (produtosAtualizados) {
+      aplicarProdutosSincronizados(produtosAtualizados);
+    } else {
+      mostrarToast('Essa venda já havia sido excluída por outro administrador. Estoque não alterado.');
+    }
+    atualizarTelas();
     atualizarIndicadorSync('ok');
     delete idsExcluindoAgora[id];
   }).catch(function (err) {
     console.warn('Falha ao excluir venda no Firestore, salvando na fila:', err);
-    enfileirarSync('venda_delete', { id: id });
-    enfileirarSync('config', { produtos: estado.produtos, config: estado.config, historicoEstoque: estado.historicoEstoque || [], atualizadoEm: Date.now() });
-    atualizarIndicadorSync('offline');
-    delete idsExcluindoAgora[id];
+    excluirOffline();
   });
 };
 
