@@ -275,8 +275,8 @@
     position: absolute; top: 10px; left: 10px; background: var(--danger); color: #fff;
     font-size: 10px; font-weight: 700; border-radius: var(--radius-pill); padding: 2px 7px; letter-spacing: .3px;
   }
-  .card.esgotado-card { opacity: .55; }
-  .card.esgotado-card .stepper button.plus { opacity: .4; pointer-events: none; }
+  /* Estoque 0: mantém apenas a etiqueta; a compra continua liberada (item pode existir fisicamente) */
+  .card.esgotado-card { opacity: .85; }
 
   /* ---------- Cart bar ---------- */
   .cartbar {
@@ -1501,7 +1501,8 @@ function mudarQtd(nome, delta) {
   var teto = 99;
   var prod = estado.produtos.find(function (p) { return p.nome === nome; });
   if (prod && prod.estoque !== undefined && prod.estoque !== null && !isNaN(prod.estoque)) {
-    teto = Math.min(teto, Number(prod.estoque));
+    // Estoque 0 não bloqueia a venda (pode haver o item fisicamente); só limita quando há saldo positivo
+    if (Number(prod.estoque) > 0) teto = Math.min(teto, Number(prod.estoque));
     if (delta > 0 && atual >= teto) { mostrarToast('Estoque insuficiente de "' + nome + '"'); return; }
   }
   var novo = Math.max(0, Math.min(teto, atual + delta));
